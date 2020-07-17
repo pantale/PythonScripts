@@ -1,0 +1,141 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import sys
+import os
+import fnmatch
+comment = ''
+
+def readFile(file):
+    with open(file, 'r') as myfile:
+        data = myfile.read().splitlines()
+    return data    
+
+def writeFile(file, data):
+    with open(file, 'w') as myfile:
+        for line in data:
+            myfile.write(line+'\n')
+        
+def scanData(data, pattern):
+    arg = ''
+    search = '@!'+pattern
+    for line in data:
+        if search in line:
+            arg = line.split('=')[1].strip()
+    return arg
+
+def getData(line, pattern):
+    return line.split('=')[1].strip()
+
+def containsData(line, pattern):
+    search = '@!'+pattern
+    if search in line: 
+        return True
+    return False
+
+def seekToBegin(data, num):
+    lineNumber = 0
+    while lineNumber < len(data):
+        line = data[lineNumber]
+        if (containsData(line, 'BEGIN')):
+            num -= 1
+            if (num == 0):
+                return lineNumber
+        lineNumber += 1
+    return -1
+
+def mergeFromSlave(new, data, lineNumber):
+    new.append(comment+'@!BEGIN = PRIVATE')
+    while lineNumber < len(data):
+        line = data[lineNumber]
+        lineNumber += 1
+        if (containsData(line, 'BEGIN')):
+            if (getData(line, 'BEGIN') == 'COMMON'): 
+                return 'COMMON', lineNumber
+        else:
+            new.append(line)
+    return 'END', 0
+    
+def mergeFromMaster(new, data, lineNumber):
+    if len(new) != 0:
+        new.append(comment+'@!BEGIN = COMMON')
+    while lineNumber < len(data):
+        line = data[lineNumber]
+        lineNumber += 1
+        if (containsData(line, 'BEGIN')):
+            if (getData(line, 'BEGIN') == 'PRIVATE'): 
+                return 'PRIVATE', lineNumber
+        else:
+            new.append(line)
+    return 'END', 0
+
+def mergeFiles(master, slave):
+    new = []
+    bloc = 1
+    masterLine = seekToBegin(master, bloc)
+    slaveLine = 0
+    line = master[masterLine]
+    mode = getData(line, 'BEGIN')
+    while (mode != 'END'):
+        if (mode == 'COMMON'):
+            mode, masterLine = mergeFromMaster(new, master, seekToBegin(master, bloc) + 1)
+            bloc += 1
+        if (mode == 'PRIVATE'):
+            mode, slaveLine = mergeFromSlave(new, slave, seekToBegin(slave, bloc-1)+1)
+            bloc += 1
+            masterLine += 1
+    return new
+    
+def treatFile(masterData, filename):
+    global comment
+    code = scanData(masterData, 'CODEFILE')
+    comment = scanData(masterData, 'COMMENT')
+    # Read the content of the file
+    slaveData = readFile(filename)
+    if (scanData(slaveData, 'CODEFILE') == code):
+        newData = mergeFiles(masterData, slaveData)
+        if (newData != slaveData):
+            print('updating: ' + filename)
+            writeFile(filename, newData)
+        else:
+            print('skiping: ' + filename)            
+    
+def runUpdate(masterFile, destTree):
+    if not (os.path.isfile(masterFile)): 
+        print('Master file '+ masterFile + ' not exists')
+        print('abord process')
+        return
+    # Read the MasterFile
+    masterData = readFile(masterFile)
+    # Get the filename from MasterFile
+    seekFilename = scanData(masterData,'FILENAME')
+    for dirpath, dirnames, filenames in os.walk(destTree):
+        for filename in filenames:
+            if (fnmatch.fnmatch(filename, seekFilename)):
+                #if (filename == seekFilename):
+                treatFile(masterData, dirpath + '/' + filename)
+    
+def printUsage():
+    print ("Usage is the following:")
+    print ("    updateDataFile masterFile destTree [options]")
+    print ("       masterFile   masterFile to use for dispaching")
+    print ("       destTree     tree to propagate the masterFile")
+    print ("Options:")
+    print ("    --help              this help") 
+    
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------     
+print ("updateDataFile")
+print ("(c) by Olivier Pantalé 2020")
+print ("")
+
+if ('--help' in sys.argv):
+    printUsage()
+    exit(0)
+    
+if (len(sys.argv) > 2):
+    masterFile = sys.argv[1]
+    destTree = sys.argv[2]
+    runUpdate(masterFile, destTree)
+else:
+    printUsage()

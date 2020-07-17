@@ -1,0 +1,228 @@
+#!/usr/bin/env python
+import sys
+import os
+import hashlib
+#from pathlib import Path
+
+def chunk_reader(fobj, chunk_size=1024):
+    """Generator that reads a file in chunks of bytes"""
+    while True:
+        chunk = fobj.read(chunk_size)
+        if not chunk:
+            return
+        yield chunk
+
+def get_hash(filename, first_chunk_only=False, hash=hashlib.sha1):
+    hashobj = hash()
+    file_object = open(filename, 'rb')
+
+    if first_chunk_only:
+        hashobj.update(file_object.read(1024))
+    else:
+        for chunk in chunk_reader(file_object):
+            hashobj.update(chunk)
+    hashed = hashobj.digest()
+
+    file_object.close()
+    return hashed
+    
+def create_hashes_by_size(hashes_by_size, path):
+    numberOfFiles = 0
+    npaths = 0
+    cpath = 0
+    
+    print ("Building three directory of: " + path)
+    
+    for dirpath, dirnames, filenames in os.walk(path):
+        npaths += 1
+
+    for dirpath, dirnames, filenames in os.walk(path):
+        cpath += 1
+        strout = ascii("Scanning: " + path + " " + str(cpath) + "/" + str(npaths) + " " + str(int(100.0*cpath/npaths)) + "%").strip('\'')
+        print (strout, end='\r', flush=True)
+        for filename in filenames:
+            full_path = os.path.join(dirpath, filename)
+            try:
+                # if the target is a symlink (soft one), this will 
+                # dereference it - change the value to the actual target file
+                full_path = os.path.realpath(full_path)
+                file_size = os.path.getsize(full_path)
+            except (OSError,):
+                # not accessible (permissions, etc) - pass on
+                continue
+
+            duplicate = hashes_by_size.get(file_size)
+            numberOfFiles += 1
+
+            if duplicate:
+                hashes_by_size[file_size].append(full_path)
+            else:
+                hashes_by_size[file_size] = []  # create the list for this file size
+                hashes_by_size[file_size].append(full_path)
+    return numberOfFiles
+
+def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
+    numberOfFiles = 0
+    cur = 0
+    tot = len(hashes_by_size)
+    for __, filenames in hashes_by_size.items():
+        cur += 1
+        print ("Fast Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "%", end='\r', flush=True)
+        for filename in filenames:
+            try:
+                small_hash = get_hash(filename, first_chunk_only=True)
+            except (OSError,):
+                # the file access might've changed till the exec point got here 
+                continue
+            numberOfFiles += 1
+            if hashes_on_1k.get(small_hash):
+                hashes_on_1k[small_hash].append(filename)
+            else:
+                hashes_on_1k[small_hash] = []          # create the list for this 1k hash
+                hashes_on_1k[small_hash].append(filename)
+
+def create_hashes_by_fullhash(hashes_on_1k, hashes_full):
+    numberOfFiles = 0
+    cur = 0
+    tot = len(hashes_on_1k)
+    strout = ""
+    lstrout = 0
+    for __, filenames in hashes_on_1k.items():
+        cur += 1
+        cfile = 0
+        for filename in filenames:
+            cfile += 1
+            print (' ' * (lstrout + 1), end='\r', flush=True)
+            strout = ascii("Full Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "% (" + str(cfile) + "/" + str(len(filenames)) + ") " + filename).strip('\'')
+            lstrout = len(strout)
+            print (strout, end='\r', flush=True)
+            try:
+                full_hash = get_hash(filename, first_chunk_only=False)
+            except (OSError,):
+                # the file access might've changed till the exec point got here 
+                continue
+            numberOfFiles += 1
+            if hashes_full.get(full_hash):
+                hashes_full[full_hash].append(filename)
+            else:
+                hashes_full[full_hash] = []          # create the list for this 1k hash
+                hashes_full[full_hash].append(filename)
+  
+def popItems(hashes_1, hashes_2):
+    hashes_1_reduced = {cle:element for cle,element in hashes_1.items() if cle in hashes_2}
+    hashes_2_reduced = {cle:element for cle,element in hashes_2.items() if cle in hashes_1}
+    return hashes_1_reduced, hashes_2_reduced
+
+def countItems(dictio):
+    it=0
+    for __, filenames in dictio.items():
+        for f in filenames:
+            it+=1
+    return it
+                           
+def list_of_duplicates(hashes_full2, hashes_full1):
+    for hsh, files in hashes_full2.items():
+        for filename in files:
+            print("file", ascii(filename), "<=>", ascii(hashes_full1[hsh][0]))
+
+def get_size_of_duplicates(hashes_full):
+    totSize = 0
+    for __, files in hashes_full.items():
+        for filename in files:
+            totSize +=  os.path.getsize(filename)
+    return totSize
+
+def getKbMbGb(val):
+    if (val > 1073741824):
+        return str(int(100*val/1073741824) / 100) + ' Gb'
+    if (val > 1048576):
+        return str(int(100*val/1048576) / 100) + ' Mb'
+    return str(int(100*val/1024) / 100) + ' Kb'
+    
+def delete_list_of_duplicates(hashes_full):
+    for __, files in hashes_full.items():
+        for filename in files:
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+            
+def remove_empty_dir(path):
+    try:
+        os.rmdir(path)
+        return 1
+    except OSError:
+        return 0
+
+def remove_empty_dirs(path):
+    empty = 0
+    for root, dirnames, filenames in os.walk(path, topdown=False):
+        for dirname in dirnames:
+            empty += remove_empty_dir(os.path.realpath(os.path.join(root, dirname)))
+    return empty
+    
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------    
+print ("duplicatesBranch")
+print ("(c) by Olivier Pantalé 2019")
+print ("")
+if (len(sys.argv) > 2):
+    hashes_by_size_p1 = {}
+    hashes_by_size_p2 = {}
+    hashes_on_1k_p1 = {}
+    hashes_on_1k_p2 = {}
+    hashes_full_p1 = {}
+    hashes_full_p2 = {}
+    
+    nfiles1 = create_hashes_by_size(hashes_by_size_p1, sys.argv[1])
+    print(nfiles1, "files scanned in directory:", sys.argv[1])
+    
+    nfiles2 = create_hashes_by_size(hashes_by_size_p2, sys.argv[2])
+    print(nfiles2, "files scanned in directory:", sys.argv[2])
+   
+    # reduce to common files
+    hashes_by_size_p1, hashes_by_size_p2 = popItems(hashes_by_size_p1, hashes_by_size_p2)
+    
+    print("Left Fast Hash")
+    create_hashes_by_fasthash(hashes_by_size_p1, hashes_on_1k_p1)
+    print("Right Fast Hash             ")
+    create_hashes_by_fasthash(hashes_by_size_p2, hashes_on_1k_p2)
+     # reduce to common files
+    hashes_on_1k_p1, hashes_on_1k_p2 = popItems(hashes_on_1k_p1, hashes_on_1k_p2)
+   
+    nbr = countItems(hashes_on_1k_p2) 
+    print('\n', nbr,"duplicated candidates after Fast Hash phase")
+
+    print("Left Full Hash")
+    create_hashes_by_fullhash(hashes_on_1k_p1, hashes_full_p1)
+    print("\nRight Full Hash")
+    create_hashes_by_fullhash(hashes_on_1k_p2, hashes_full_p2)
+     # reduce to common files
+    hashes_full_p1, hashes_full_p2 = popItems(hashes_full_p1, hashes_full_p2)
+
+    nbr = countItems(hashes_full_p2) 
+    print('\n', nbr, 'duplicates found (' + getKbMbGb(get_size_of_duplicates(hashes_full_p2)) + ')')
+    
+    if (len(sys.argv) > 3):
+        if '--print' in sys.argv[3:]:
+            list_of_duplicates(hashes_full_p2, hashes_full_p1)
+        if '--delete' in sys.argv[3:]:
+            print("DELETING FILES")
+            delete_list_of_duplicates(hashes_full_p2)
+        if '--empty' in sys.argv[3:]:
+            print("REMOVING EMPTY DIRECTORIES")
+            empty = remove_empty_dirs(sys.argv[2])
+            empty += remove_empty_dir(sys.argv[2])
+            if empty > 1:
+                print(empty,'directories removed')
+            else:
+                print(empty,'directory removed')
+                
+else:
+    print ("Usage is the following:")
+    print ("    duplicateBranch keep_path delete_path [options]")
+    print ("Options:")
+    print ("    --print   displays the list of files")
+    print ("    --delete  deletes duplicated files")
+    print ("    --empty   removes empty sub-directories")

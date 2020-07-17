@@ -1,0 +1,9 @@
+02/07/2020 - Update updateDataFile with ability to define filename using wildcards
+
+01/07/2020 - Update svgToPdf with ability to treat only one file
+
+29/06/2020 - Add updateDataFile program
+
+26/06/2020 - Add svgToPdf program
+
+10/06/2020 - Initial commit
