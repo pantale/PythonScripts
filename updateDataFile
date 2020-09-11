@@ -13,21 +13,21 @@ def readFile(file):
 def writeFile(file, data):
     with open(file, 'w') as myfile:
         for line in data:
-            myfile.write(line+'\n')
+            myfile.write(line + '\n')
         
 def scanData(data, pattern):
     arg = ''
-    search = '@!'+pattern
+    search = '@!' + pattern
     for line in data:
         if search in line:
             arg = line.split('=')[1].strip()
     return arg
 
-def getData(line, pattern):
+def getData(line):
     return line.split('=')[1].strip()
 
 def containsData(line, pattern):
-    search = '@!'+pattern
+    search = '@!' + pattern
     if search in line: 
         return True
     return False
@@ -44,28 +44,39 @@ def seekToBegin(data, num):
     return -1
 
 def mergeFromSlave(new, data, lineNumber):
-    new.append(comment+'@!BEGIN = PRIVATE')
+    new.append(comment + '@!BEGIN = PRIVATE')
     while lineNumber < len(data):
         line = data[lineNumber]
         lineNumber += 1
         if (containsData(line, 'BEGIN')):
-            if (getData(line, 'BEGIN') == 'COMMON'): 
+            if (getData(line) == 'COMMON'): 
                 return 'COMMON', lineNumber
         else:
             new.append(line)
     return 'END', 0
     
+def mergeFromInclude(new, include):
+    includeData = readFile(include)
+    lineNumber = 0
+    while lineNumber < len(includeData):
+        new.append(includeData[lineNumber])
+        lineNumber += 1
+
 def mergeFromMaster(new, data, lineNumber):
     if len(new) != 0:
-        new.append(comment+'@!BEGIN = COMMON')
+        new.append(comment + '@!BEGIN = COMMON')
     while lineNumber < len(data):
+        writeOn = True
         line = data[lineNumber]
         lineNumber += 1
+        if (containsData(line, 'INCLUDE')):
+            writeOn = False
+            mergeFromInclude(new, getData(line))
         if (containsData(line, 'BEGIN')):
-            if (getData(line, 'BEGIN') == 'PRIVATE'): 
+            if (getData(line) == 'PRIVATE'): 
                 return 'PRIVATE', lineNumber
         else:
-            new.append(line)
+            if (writeOn) : new.append(line)
     return 'END', 0
 
 def mergeFiles(master, slave):
@@ -74,13 +85,13 @@ def mergeFiles(master, slave):
     masterLine = seekToBegin(master, bloc)
     slaveLine = 0
     line = master[masterLine]
-    mode = getData(line, 'BEGIN')
+    mode = getData(line)
     while (mode != 'END'):
         if (mode == 'COMMON'):
             mode, masterLine = mergeFromMaster(new, master, seekToBegin(master, bloc) + 1)
             bloc += 1
         if (mode == 'PRIVATE'):
-            mode, slaveLine = mergeFromSlave(new, slave, seekToBegin(slave, bloc-1)+1)
+            mode, slaveLine = mergeFromSlave(new, slave, seekToBegin(slave, bloc-1) + 1)
             bloc += 1
             masterLine += 1
     return new
@@ -101,7 +112,7 @@ def treatFile(masterData, filename):
     
 def runUpdate(masterFile, destTree):
     if not (os.path.isfile(masterFile)): 
-        print('Master file '+ masterFile + ' not exists')
+        print('Master file ' + masterFile + ' not exists')
         print('abord process')
         return
     # Read the MasterFile
