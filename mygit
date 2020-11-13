@@ -39,29 +39,45 @@ def getListModifiedFiles():
     ret = runGit(['ls-files','--modified'])
     return multilineStringToList(ret[:-1])
 
-def getListFiles():
+def getListTrackedFiles():
     ret = runGit(['ls-files'])
     return multilineStringToList(ret[:-1])
 
-def ListFiles():
-    lst = getListFiles()
-    if (len(lst) > 1):
-        print("%g files tracked"%(len(lst)))
-    else:
-        print("%g file tracked"%(len(lst)))
+def getListUntrackedFiles():
+    ret = runGit(['ls-files','--other'])
+    return multilineStringToList(ret[:-1])
+
+def ListTrackedFiles():
+    lst = getListTrackedFiles()
+    print("List of files:");
     for l in lst:
-        print(l)
+        print("->",l)
+    if (len(lst) > 1):
+        print("\n%g files tracked"%(len(lst)))
+    else:
+        print("\n%g file tracked"%(len(lst)))
+        
+def ListUntrackedFiles():
+    lst = getListUntrackedFiles()
+    print("List of files:");
+    for l in lst:
+        print("->",l)
+    if (len(lst) > 1):
+        print("\n%g files untracked"%(len(lst)))
+    else:
+        print("\n%g file untracked"%(len(lst)))
         
 def ListModifiedFiles():
     lst = getListModifiedFiles()
+    print("List of files:");
+    for l in lst:
+        print("->",l)
     if (len(lst) > 1):
-        print("%g files modified"%(len(lst)))
+        print("\n%g files modified"%(len(lst)))
     else:
-        print("%g file modified"%(len(lst)))
+        print("\n%g file modified"%(len(lst)))
         if (len(lst) == 0):
             print('Everything is up to date')
-    for l in lst:
-        print(l)
 
 def AddFiles():
     lst = getListModifiedFiles()
@@ -73,7 +89,6 @@ def AddFiles():
             print('Everything is up to date')
     for l in lst:
         runGit(['add', l])
-        #repository.git.add(l)
         print('add ->',l)
        
 # --------------------------------------------------------    
@@ -87,7 +102,8 @@ if (len(sys.argv) > mandatoryArgs):
     # get the current directory
     curDir = os.getcwd()
     key = sys.argv[1]
-    if (key == 'list'): ListFiles()
+    if (key == 'tracked'): ListTrackedFiles()
+    if (key == 'untracked'): ListUntrackedFiles()
     if (key == 'modified'): ListModifiedFiles()
     if (key == 'add'): AddFiles()
     # filenames = glob.glob(pattern)
@@ -99,6 +115,7 @@ else:
     print ("Usage is the following:")
     print ("    mygit action [options]")
     print ("actions:")
-    print ("    list     - list of files under control")
-    print ("    modified - list of modified files")
-    print ("    add      - add all modified files")
+    print ("    add       : add all modified files")
+    print ("    modified  : list of modified files")
+    print ("    tracked   : list of files under control")
+    print ("    untracked : list of files not under control")
