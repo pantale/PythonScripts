@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+import sys
+# import glob
+# import shutil
+import subprocess
+import os
+#import git
+mandatoryArgs = 1
+
+# def getGitRepository(path):
+#         git_repo = git.Repo(path, search_parent_directories=True)
+#         return git_repo
+    
+# def getGitRoot(path):
+#         git_repo = getGitRepository()
+#         git_root = git_repo.git.rev_parse("--show-toplevel")
+#         return git_root
+
+def runGit(args):
+    cmd = ['git']
+    return subprocess.run(cmd+args, stdout=subprocess.PIPE).stdout.decode('utf-8')
+
+def decodeLine(line):
+    if line[0]=='\"' : 
+        line = line.lstrip('\"').rstrip('\"')
+        line = line.encode('ascii').decode('unicode_escape').encode('latin1').decode('utf8')
+    return line
+
+def multilineStringToList(string):
+    if string=='': return []
+    lst = list(string.split('\n'))
+    i = 0
+    for l in lst:
+        lst[i] = decodeLine(l)
+        i += 1
+    return lst
+
+def getListModifiedFiles():
+    ret = runGit(['ls-files','--modified'])
+    return multilineStringToList(ret[:-1])
+
+def getListFiles():
+    ret = runGit(['ls-files'])
+    return multilineStringToList(ret[:-1])
+
+def ListFiles():
+    lst = getListFiles()
+    if (len(lst) > 1):
+        print("%g files tracked"%(len(lst)))
+    else:
+        print("%g file tracked"%(len(lst)))
+    for l in lst:
+        print(l)
+        
+def ListModifiedFiles():
+    lst = getListModifiedFiles()
+    if (len(lst) > 1):
+        print("%g files modified"%(len(lst)))
+    else:
+        print("%g file modified"%(len(lst)))
+        if (len(lst) == 0):
+            print('Everything is up to date')
+    for l in lst:
+        print(l)
+
+def AddFiles():
+    lst = getListModifiedFiles()
+    if (len(lst)>1):
+        print("%g files to update"%(len(lst)))
+    else:
+        print("%g file to update"%(len(lst)))
+        if (len(lst) == 0):
+            print('Everything is up to date')
+    for l in lst:
+        runGit(['add', l])
+        #repository.git.add(l)
+        print('add ->',l)
+       
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------    
+print ("mygit")
+print ("(c) by Olivier Pantalé 2020")
+print ("")  
+
+if (len(sys.argv) > mandatoryArgs):
+    # get the current directory
+    curDir = os.getcwd()
+    key = sys.argv[1]
+    if (key == 'list'): ListFiles()
+    if (key == 'modified'): ListModifiedFiles()
+    if (key == 'add'): AddFiles()
+    # filenames = glob.glob(pattern)
+    # if (len(sys.argv) > mandatoryArgs+1):
+    #     if '--backup' in sys.argv[mandatoryArgs+1:]:
+    #         BackupFile(filenames)
+    # ReplaceInFile(filenames, oldstring, newstring)
+else:
+    print ("Usage is the following:")
+    print ("    mygit action [options]")
+    print ("actions:")
+    print ("    list     - list of files under control")
+    print ("    modified - list of modified files")
+    print ("    add      - add all modified files")

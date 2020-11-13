@@ -4,6 +4,10 @@
 
 ## 2020
 
+### November 2020
+
+13/11/2020 - Add mygit utility
+
 ### July 2020
 
 02/07/2020 - Update updateDataFile with ability to define filename using wildcards
