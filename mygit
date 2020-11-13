@@ -102,10 +102,21 @@ if (len(sys.argv) > mandatoryArgs):
     # get the current directory
     curDir = os.getcwd()
     key = sys.argv[1]
-    if (key == 'tracked'): ListTrackedFiles()
-    if (key == 'untracked'): ListUntrackedFiles()
-    if (key == 'modified'): ListModifiedFiles()
-    if (key == 'add'): AddFiles()
+    executed = False
+    if (key == 'tracked'): 
+        ListTrackedFiles()
+        executed = True
+    if (key == 'untracked'): 
+        ListUntrackedFiles()
+        executed = True
+    if (key == 'modified'): 
+        ListModifiedFiles()
+        executed = True
+    if (key == 'add'): 
+        AddFiles()
+        executed = True
+    if (not executed):
+        print("Error : unknown command :", key)
     # filenames = glob.glob(pattern)
     # if (len(sys.argv) > mandatoryArgs+1):
     #     if '--backup' in sys.argv[mandatoryArgs+1:]:
