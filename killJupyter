@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+import sys
+import glob
+import os
+
+mandatoryArgs = 0
+
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------   
+print ("killJupyter")
+print ("(c) by Olivier Pantalé 2021")
+    
+if ('--help' in sys.argv):
+    print ("Usage is the following:")
+    print ("    killJupyter [options]")
+    print ("Options:")
+    print ("    --help              this help")
+    exit(0)
+
+ret = os.popen('jupyter notebook list').read().split('\n')
+for l in ret:
+    if ('http://localhost' in l):
+        port = l.split('http://localhost:')[1].split('/?token=')[0]
+        print('Stop server on port :',port)
+        os.system('jupyter notebook stop ' + port + '> /dev/null')
+            
