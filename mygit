@@ -44,8 +44,9 @@ def getListTrackedFiles():
     return multilineStringToList(ret[:-1])
 
 def getListUntrackedFiles():
-    ret = runGit(['ls-files','--other'])
-    return multilineStringToList(ret[:-1])
+    ret = runGit(['ls-files','--others'])
+    l = multilineStringToList(ret[:-1])
+    return [x for x in l if not '/' in x]
 
 def ListTrackedFiles():
     lst = getListTrackedFiles()
@@ -109,7 +110,7 @@ if (len(sys.argv) > mandatoryArgs):
     if (key == 'untracked'): 
         ListUntrackedFiles()
         executed = True
-    if (key == 'modified'): 
+    if (key == 'modified' or key == 'mod'): 
         ListModifiedFiles()
         executed = True
     if (key == 'add'): 
@@ -127,6 +128,6 @@ else:
     print ("    mygit action [options]")
     print ("actions:")
     print ("    add       : add all modified files")
-    print ("    modified  : list of modified files")
+    print ("    modified  : list of modified files (short mod")
     print ("    tracked   : list of files under control")
     print ("    untracked : list of files not under control")
