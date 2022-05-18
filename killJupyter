@@ -25,3 +25,10 @@ for l in ret:
         print('Stop server on port :',port)
         os.system('jupyter notebook stop ' + port + '> /dev/null')
             
+ret = os.popen('jupyter lab list').read().split('\n')
+for l in ret:
+    if ('http://localhost' in l):
+        port = l.split('http://localhost:')[1].split('/?token=')[0]
+        print('Stop server on port :',port)
+        os.system('jupyter lab stop ' + port + '> /dev/null')
+                        
