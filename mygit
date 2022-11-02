@@ -92,6 +92,9 @@ def AddFiles():
         runGit(['add', l])
         print('add ->',l)
        
+def CommitAmendNoEdit():
+    runGit(['commit','--amend','--no-edit'])
+
 # --------------------------------------------------------    
 # Start of the main program
 # --------------------------------------------------------    
@@ -116,6 +119,9 @@ if (len(sys.argv) > mandatoryArgs):
     if (key == 'add'): 
         AddFiles()
         executed = True
+    if (key == 'redo'): 
+        CommitAmendNoEdit()
+        executed = True        
     if (not executed):
         print("Error : unknown command :", key)
     # filenames = glob.glob(pattern)
@@ -131,3 +137,4 @@ else:
     print ("    modified  : list of modified files (short mod")
     print ("    tracked   : list of files under control")
     print ("    untracked : list of files not under control")
+    print ("    redo      : performs git commit --amend --no-edit")
