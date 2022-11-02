@@ -12,7 +12,7 @@ deleteTarget = False
 def ConvertFile(svgfile, pdffile):
     global treated
     treated += 1
-    command = 'inkscape --file=' + svgfile + ' --export-area-drawing --without-gui --export-pdf=' + pdffile
+    command = 'inkscape ' + svgfile + ' --export-area-drawing -o ' + pdffile
     os.system(command)
     return
 
