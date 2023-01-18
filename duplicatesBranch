@@ -51,14 +51,15 @@ def create_hashes_by_size(hashes_by_size, path):
                 # not accessible (permissions, etc) - pass on
                 continue
 
-            duplicate = hashes_by_size.get(file_size)
-            numberOfFiles += 1
-
-            if duplicate:
-                hashes_by_size[file_size].append(full_path)
-            else:
-                hashes_by_size[file_size] = []  # create the list for this file size
-                hashes_by_size[file_size].append(full_path)
+            if (file_size != 0):
+                duplicate = hashes_by_size.get(file_size)
+                numberOfFiles += 1
+    
+                if duplicate:
+                    hashes_by_size[file_size].append(full_path)
+                else:
+                    hashes_by_size[file_size] = []  # create the list for this file size
+                    hashes_by_size[file_size].append(full_path)
     return numberOfFiles
 
 def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
