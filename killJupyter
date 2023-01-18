@@ -2,6 +2,7 @@
 import sys
 import glob
 import os
+from subprocess import PIPE, Popen
 
 mandatoryArgs = 0
 
@@ -18,14 +19,18 @@ if ('--help' in sys.argv):
     print ("    --help              this help")
     exit(0)
 
-ret = os.popen('jupyter notebook list').read().split('\n')
+p = Popen("jupyter notebook list", shell=True, stdout=PIPE, stderr=PIPE)
+stdout, stderr = p.communicate()
+ret = stderr.decode().split('\n')
 for l in ret:
     if ('http://localhost' in l):
         port = l.split('http://localhost:')[1].split('/?token=')[0]
         print('Stop server on port :',port)
         os.system('jupyter notebook stop ' + port + '> /dev/null')
-            
-ret = os.popen('jupyter lab list').read().split('\n')
+
+p = Popen("jupyter lab list", shell=True, stdout=PIPE, stderr=PIPE)
+stdout, stderr = p.communicate()
+ret = stderr.decode().split('\n')
 for l in ret:
     if ('http://localhost' in l):
         port = l.split('http://localhost:')[1].split('/?token=')[0]
