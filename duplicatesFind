@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+import sys
+import os
+import hashlib
+from datetime import datetime
+from tqdm import tqdm
+from send2trash import send2trash
+
+def getKbMbGb(val):
+    if (val > 1073741824):
+        return str(int(100*val/1073741824) / 100) + ' Gb'
+    if (val > 1048576):
+        return str(int(100*val/1048576) / 100) + ' Mb'
+    return str(int(100*val/1024) / 100) + ' Kb'
+
+def create_duplicates_by_size(lf, folder):
+    # Bouclez sur tous les fichiers dans l'arborescence
+    fls = 0
+    for foldername, subfolders, filenames in os.walk(folder):
+        for filename in filenames:
+            file_path = os.path.join(foldername, filename)
+            try:
+                # if the target is a symlink (soft one), this will 
+                # dereference it - change the value to the actual target file
+                file_path = os.path.realpath(file_path)
+                file_size = os.path.getsize(file_path)
+            except (OSError,):
+                # not accessible (permissions, etc) - pass on
+                continue
+            # Récupérer la taille du fichier
+            #file_size = os.path.getsize(file_path)
+            if (file_size != 0):
+                fls += 1
+                if file_size not in lf:
+                    lf[file_size] = [file_path]
+                else:
+                    lf[file_size].append(file_path)
+    return fls
+
+def create_duplicates_by_fast_hash(df, df2):
+    # Bouclez sur les tailles de fichiers pour vérifier les doublons
+    for size, files in tqdm(df2.items(), desc='Loading', ncols=110, colour='#7f0000'):
+        if len(files) > 1:
+            for file in files:
+                # Calculez le hachage du fichier
+                file_hash = hashlib.md5(open(file, 'rb').read(1024)).hexdigest()
+                # Ajoutez le fichier à la liste de duplicatas s'il existe déjà
+                if file_hash in df:
+                    df[file_hash].append(file)
+                else:
+                    df[file_hash] = [file]
+
+def create_duplicates_by_hash(df, df2):
+    # Bouclez sur les tailles de fichiers pour vérifier les doublons
+    for size, files in tqdm(df2.items(), desc='Loading', ncols=110, colour='#7f0000'):
+        if len(files) > 1:
+            for file in files:
+                # Calculez le hachage du fichier
+                file_hash = hashlib.md5(open(file, 'rb').read()).hexdigest()
+                # Ajoutez le fichier à la liste de duplicatas s'il existe déjà
+                if file_hash in df:
+                    df[file_hash].append(file)
+                else:
+                    df[file_hash] = [file]
+
+def get_size_of_duplicates(duplicates):
+    sz = 0
+    for f,p in duplicates.items():
+        sz+= os.path.getsize(p[0]) * (len(p)-1)
+    return sz   
+
+def list_of_duplicates(duplicates):
+    # Affiche les fichiers en doublon
+    for file_hash, paths in duplicates.items():
+        if len(paths) > 1:
+            print("-----------------------")
+            for path in paths:
+                print(path, ":", datetime.fromtimestamp(os.path.getmtime(path)))
+
+def keep_recent_file(duplicates):
+    for file_hash, paths in duplicates.items():
+        if len(paths) > 1:
+            file_dates = []
+            for file in paths:
+                file_dates.append((file, os.path.getmtime(file)))
+            recent_file = max(file_dates, key = lambda x: x[1])
+            for file in paths:
+                if file != recent_file[0]:
+                    send2trash(file)
+                    print(f"{file} was moved to trash")
+                    
+def keep_old_file(duplicates):
+    for file_hash, paths in duplicates.items():
+        if len(paths) > 1:
+            file_dates = []
+            for file in paths:
+                file_dates.append((file, os.path.getmtime(file)))
+            recent_file = min(file_dates, key = lambda x: x[1])
+            for file in paths:
+                if file != recent_file[0]:
+                    send2trash(file)
+                    print(f"{file} was moved to trash")
+
+def removeSingle(fd):
+    dd = {}
+    for f, p in fd.items():
+        if (len(p)>1) : 
+            dd[f] = p
+    return dd
+                    
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------    
+print ("duplicatesFind")
+print ("(c) by Olivier Pantalé 2022")
+print ("")
+if (len(sys.argv) > 1):
+    
+    print("Scanning subdirectories for duplicate files")
+
+    folder = sys.argv[1]
+    lf = {}
+    nfiles = create_duplicates_by_size(lf, folder)
+    file_sizes = removeSingle(lf)
+    print(nfiles, "files scanned in directory:", folder)
+    print(len(file_sizes), "potential duplicate candidates")
+    
+    lf = {}
+    create_duplicates_by_fast_hash(lf, file_sizes)
+    duplicates_f = removeSingle(lf)
+    print(len(duplicates_f), "potential duplicate candidates")
+
+    lf = {}
+    create_duplicates_by_hash(lf, duplicates_f)
+    duplicates = removeSingle(lf)
+    savedSize = get_size_of_duplicates(duplicates)
+    print('\n', len(duplicates), 'duplicates found (' + getKbMbGb(savedSize) + ')')
+    
+    if (len(sys.argv) > 2):
+        if '--print' in sys.argv[2:]:
+            list_of_duplicates(duplicates)
+        if '--new' in sys.argv[2:]:
+            print("DELETING all but the most recent duplicate files")
+            keep_recent_file(duplicates)
+            print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
+        if '--old' in sys.argv[2:]:
+            print("DELETING all but the oldest duplicate files")
+            keep_old_file(duplicates)
+            print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
+            
+else:
+    print ("Usage is the following:")
+    print ("    duplicateFind path [options]")
+    print ("Options:")
+    print ("    --print   displays the list of files")
+    print ("    --new     deletes all but the most recent duplicate files")
+    print ("    --old     deletes all but the oldest duplicate files")
