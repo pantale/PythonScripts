@@ -137,4 +137,4 @@ else:
     print ("    modified  : list of modified files (short mod")
     print ("    tracked   : list of files under control")
     print ("    untracked : list of files not under control")
-    print ("    redo      : performs git commit --amend --no-edit")
+    print ("    amend     : performs git commit --amend --no-edit")
