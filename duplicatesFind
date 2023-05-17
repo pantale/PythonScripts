@@ -83,11 +83,14 @@ def keep_recent_file(duplicates):
             file_dates = []
             for file in paths:
                 file_dates.append((file, os.path.getmtime(file)))
-            recent_file = max(file_dates, key = lambda x: x[1])
+            keep_file = max(file_dates, key = lambda x: x[1])
             for file in paths:
-                if file != recent_file[0]:
-                    send2trash(file)
-                    print(f"{file} was moved to trash")
+                if file != keep_file[0]:
+                    try:
+                        send2trash(file)
+                        print(f"{file} was moved to trash")
+                    except:
+                        continue    
                     
 def keep_old_file(duplicates):
     for file_hash, paths in duplicates.items():
@@ -95,11 +98,14 @@ def keep_old_file(duplicates):
             file_dates = []
             for file in paths:
                 file_dates.append((file, os.path.getmtime(file)))
-            recent_file = min(file_dates, key = lambda x: x[1])
+            keep_file = min(file_dates, key = lambda x: x[1])
             for file in paths:
-                if file != recent_file[0]:
-                    send2trash(file)
-                    print(f"{file} was moved to trash")
+                if file != keep_file[0]:
+                    try:
+                        send2trash(file)
+                        print(f"{file} was moved to trash")
+                    except:
+                        continue 
 
 def removeSingle(fd):
     dd = {}
@@ -123,27 +129,27 @@ if (len(sys.argv) > 1):
     nfiles = create_duplicates_by_size(lf, folder)
     file_sizes = removeSingle(lf)
     print(nfiles, "files scanned in directory:", folder)
-    print(len(file_sizes), "potential duplicate candidates")
+    print(len(file_sizes), "potential duplicate candidates by size")
     
     lf = {}
     create_duplicates_by_fast_hash(lf, file_sizes)
     duplicates_f = removeSingle(lf)
-    print(len(duplicates_f), "potential duplicate candidates")
+    print(len(duplicates_f), "potential duplicate candidates by fast hash")
 
     lf = {}
     create_duplicates_by_hash(lf, duplicates_f)
     duplicates = removeSingle(lf)
     savedSize = get_size_of_duplicates(duplicates)
-    print('\n', len(duplicates), 'duplicates found (' + getKbMbGb(savedSize) + ')')
+    print('\n', len(duplicates), 'real duplicate files found (' + getKbMbGb(savedSize) + ')')
     
     if (len(sys.argv) > 2):
         if '--print' in sys.argv[2:]:
             list_of_duplicates(duplicates)
-        if '--new' in sys.argv[2:]:
+        if '--keepnew' in sys.argv[2:]:
             print("DELETING all but the most recent duplicate files")
             keep_recent_file(duplicates)
             print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
-        if '--old' in sys.argv[2:]:
+        if '--keepold' in sys.argv[2:]:
             print("DELETING all but the oldest duplicate files")
             keep_old_file(duplicates)
             print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
@@ -152,6 +158,6 @@ else:
     print ("Usage is the following:")
     print ("    duplicateFind path [options]")
     print ("Options:")
-    print ("    --print   displays the list of files")
-    print ("    --new     deletes all but the most recent duplicate files")
-    print ("    --old     deletes all but the oldest duplicate files")
+    print ("    --print    displays the list of files")
+    print ("    --keepnew  deletes all but the most recent duplicate files")
+    print ("    --keepold  deletes all but the oldest duplicate files")
