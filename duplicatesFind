@@ -126,17 +126,20 @@ if (len(sys.argv) > 1):
 
     folder = sys.argv[1]
     lf = {}
+    print("Check duplicates using Sizes")
     nfiles = create_duplicates_by_size(lf, folder)
     file_sizes = removeSingle(lf)
     print(nfiles, "files scanned in directory:", folder)
     print(len(file_sizes), "potential duplicate candidates by size")
     
     lf = {}
+    print("Check duplicates using Fast Hash")
     create_duplicates_by_fast_hash(lf, file_sizes)
     duplicates_f = removeSingle(lf)
     print(len(duplicates_f), "potential duplicate candidates by fast hash")
 
     lf = {}
+    print("Check duplicates using Full Hash")
     create_duplicates_by_hash(lf, duplicates_f)
     duplicates = removeSingle(lf)
     savedSize = get_size_of_duplicates(duplicates)

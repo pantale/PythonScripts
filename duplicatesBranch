@@ -2,7 +2,7 @@
 import sys
 import os
 import hashlib
-#from pathlib import Path
+from tqdm import tqdm
 
 def chunk_reader(fobj, chunk_size=1024):
     """Generator that reads a file in chunks of bytes"""
@@ -29,17 +29,17 @@ def get_hash(filename, first_chunk_only=False, hash=hashlib.sha1):
 def create_hashes_by_size(hashes_by_size, path):
     numberOfFiles = 0
     npaths = 0
-    cpath = 0
+    # cpath = 0
     
     print ("Building three directory of: " + path)
     
     for dirpath, dirnames, filenames in os.walk(path):
         npaths += 1
 
-    for dirpath, dirnames, filenames in os.walk(path):
-        cpath += 1
-        strout = ascii("Scanning: " + path + " " + str(cpath) + "/" + str(npaths) + " " + str(int(100.0*cpath/npaths)) + "%").strip('\'')
-        print (strout, end='\r', flush=True)
+    for dirpath, dirnames, filenames in tqdm(os.walk(path), total=npaths, desc='Loading', ncols=110, colour='#7f0000'):
+        # cpath += 1
+        # strout = ascii("Scanning: " + path + " " + str(cpath) + "/" + str(npaths) + " " + str(int(100.0*cpath/npaths)) + "%").strip('\'')
+        # print (strout, end='\r', flush=True)
         for filename in filenames:
             full_path = os.path.join(dirpath, filename)
             try:
@@ -64,11 +64,11 @@ def create_hashes_by_size(hashes_by_size, path):
 
 def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
     numberOfFiles = 0
-    cur = 0
+    # cur = 0
     tot = len(hashes_by_size)
-    for __, filenames in hashes_by_size.items():
-        cur += 1
-        print ("Fast Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "%", end='\r', flush=True)
+    for __, filenames in tqdm(hashes_by_size.items(), desc='Hash', total=tot, ncols=110, colour='#7f0000'):
+        # cur += 1
+        # print ("Fast Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "%", end='\r', flush=True)
         for filename in filenames:
             try:
                 small_hash = get_hash(filename, first_chunk_only=True)
@@ -82,6 +82,12 @@ def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
                 hashes_on_1k[small_hash] = []          # create the list for this 1k hash
                 hashes_on_1k[small_hash].append(filename)
 
+def shorten(strout):
+    ln = 120
+    if len(strout) > ln:
+        strout = strout[0:70] + ' ... ' + strout[-50:]
+    return strout
+
 def create_hashes_by_fullhash(hashes_on_1k, hashes_full):
     numberOfFiles = 0
     cur = 0
@@ -93,8 +99,9 @@ def create_hashes_by_fullhash(hashes_on_1k, hashes_full):
         cfile = 0
         for filename in filenames:
             cfile += 1
-            print (' ' * (lstrout + 1), end='\r', flush=True)
+            print (' ' * (lstrout+1), end='\r', flush=True)
             strout = ascii("Full Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "% (" + str(cfile) + "/" + str(len(filenames)) + ") " + filename).strip('\'')
+            strout = shorten(strout)
             lstrout = len(strout)
             print (strout, end='\r', flush=True)
             try:

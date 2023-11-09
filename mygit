@@ -16,6 +16,8 @@ mandatoryArgs = 1
 #         git_root = git_repo.git.rev_parse("--show-toplevel")
 #         return git_root
 
+opt_single = False
+
 def runGit(args):
     cmd = ['git']
     return subprocess.run(cmd+args, stdout=subprocess.PIPE).stdout.decode('utf-8')
@@ -51,8 +53,11 @@ def getListUntrackedFiles():
 def ListTrackedFiles():
     lst = getListTrackedFiles()
     print("List of files:");
-    for l in lst:
-        print("->",l)
+    if (opt_single):
+        print(lst)
+    else:
+        for l in lst:
+            print("->",l)
     if (len(lst) > 1):
         print("\n%g files tracked"%(len(lst)))
     else:
@@ -61,8 +66,11 @@ def ListTrackedFiles():
 def ListUntrackedFiles():
     lst = getListUntrackedFiles()
     print("List of files:");
-    for l in lst:
-        print("->",l)
+    if (opt_single):
+        print(lst)
+    else:
+        for l in lst:
+            print("->",l)
     if (len(lst) > 1):
         print("\n%g files untracked"%(len(lst)))
     else:
@@ -71,8 +79,11 @@ def ListUntrackedFiles():
 def ListModifiedFiles():
     lst = getListModifiedFiles()
     print("List of files:");
-    for l in lst:
-        print("->",l)
+    if (opt_single):
+        print(lst)
+    else:
+        for l in lst:
+            print("->",l)
     if (len(lst) > 1):
         print("\n%g files modified"%(len(lst)))
     else:
@@ -91,7 +102,10 @@ def AddFiles():
     for l in lst:
         runGit(['add', l])
         print('add ->',l)
-       
+        
+def CommitFiles(s):
+    runGit(['commit','-m',s])
+        
 def CommitAmendNoEdit():
     runGit(['commit','--amend','--no-edit'])
 
@@ -102,24 +116,31 @@ print ("mygit")
 print ("(c) by Olivier Pantalé 2020")
 print ("")  
 
+if (len(sys.argv) > mandatoryArgs+1):
+    oarg = sys.argv[-1]
+    if (oarg == '--single' or oarg == '--s'): opt_single = True
+
 if (len(sys.argv) > mandatoryArgs):
     # get the current directory
     curDir = os.getcwd()
     key = sys.argv[1]
     executed = False
-    if (key == 'tracked'): 
+    if (key == 'tracked' or key == 't'): 
         ListTrackedFiles()
         executed = True
-    if (key == 'untracked'): 
+    if (key == 'untracked' or key == 'u'): 
         ListUntrackedFiles()
         executed = True
-    if (key == 'modified' or key == 'mod'): 
+    if (key == 'modified' or key == 'm'): 
         ListModifiedFiles()
         executed = True
-    if (key == 'add'): 
+    if (key == 'add' or key == 'a'): 
         AddFiles()
         executed = True
-    if (key == 'redo'): 
+    if (key == 'commit' or key == 'c'): 
+        CommitFiles(sys.argv[-1])
+        executed = True
+    if (key == 'redo' or key == 'r'): 
         CommitAmendNoEdit()
         executed = True        
     if (not executed):
@@ -133,8 +154,11 @@ else:
     print ("Usage is the following:")
     print ("    mygit action [options]")
     print ("actions:")
-    print ("    add       : add all modified files")
-    print ("    modified  : list of modified files (short mod")
-    print ("    tracked   : list of files under control")
-    print ("    untracked : list of files not under control")
-    print ("    redo      : performs git commit --amend --no-edit")
+    print ("    add  (a)      : add all modified files")
+    print ("    commit (c)    : commit staged files")
+    print ("    modified (m)  : list of modified files")
+    print ("    tracked (t)   : list of files under control")
+    print ("    untracked (u) : list of files not under control")
+    print ("    redo (r)      : performs git commit --amend --no-edit")
+    print ("options:")
+    print ("--single (--s)    : output data on a single line")
