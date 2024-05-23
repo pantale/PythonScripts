@@ -26,15 +26,19 @@ def get_hash(filename, first_chunk_only=False, hash=hashlib.sha1):
     file_object.close()
     return hashed
     
-def create_hashes_by_size(hashes_by_size, path):
+def create_hashes_by_size(hashes_by_size, path, rp):
     numberOfFiles = 0
     npaths = 0
     # cpath = 0
     
-    print ("Building three directory of: " + path)
+    if (rp) :
+        print ("Building three directory of: " + path)
+    else:
+        print ("Seeking directory of: " + path)
     
     for dirpath, dirnames, filenames in os.walk(path):
         npaths += 1
+        if (not rp) : break
 
     for dirpath, dirnames, filenames in tqdm(os.walk(path), total=npaths, desc='Loading', ncols=110, colour='#7f0000'):
         # cpath += 1
@@ -60,6 +64,7 @@ def create_hashes_by_size(hashes_by_size, path):
                 else:
                     hashes_by_size[file_size] = []  # create the list for this file size
                     hashes_by_size[file_size].append(full_path)
+        if (not rp) : break
     return numberOfFiles
 
 def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
@@ -182,11 +187,17 @@ if (len(sys.argv) > 2):
     hashes_on_1k_p2 = {}
     hashes_full_p1 = {}
     hashes_full_p2 = {}
+    rpk = True
+    rpd = True
     
-    nfiles1 = create_hashes_by_size(hashes_by_size_p1, sys.argv[1])
+    if (len(sys.argv) > 3):
+        if '--nrk' in sys.argv[3:]: rpk = False
+        if '--nrd' in sys.argv[3:]: rpd = False
+            
+    nfiles1 = create_hashes_by_size(hashes_by_size_p1, sys.argv[1], rpk)
     print(nfiles1, "files scanned in directory:", sys.argv[1])
     
-    nfiles2 = create_hashes_by_size(hashes_by_size_p2, sys.argv[2])
+    nfiles2 = create_hashes_by_size(hashes_by_size_p2, sys.argv[2], rpd)
     print(nfiles2, "files scanned in directory:", sys.argv[2])
    
     # reduce to common files
@@ -234,3 +245,5 @@ else:
     print ("    --print   displays the list of files")
     print ("    --delete  deletes duplicated files")
     print ("    --empty   removes empty sub-directories")
+    print ("    --nrk     non-recursive search for keep_path")
+    print ("    --nrd     non-recursive search for delete_path")
