@@ -4,25 +4,30 @@ import sys
 import glob
 import shutil
 import argparse
+import re
 
-def replace_string_in_files(file_pattern, search_string, replace_string, backup=False, recursive=False):
-    # Convert special characters in the search and replace strings
-    search_string = search_string.encode().decode('unicode_escape')
-    replace_string = replace_string.encode().decode('unicode_escape')
-
-    # Find files matching the pattern in the current directory and its subdirectories
-    if recursive:
+def replace_string_in_files(file_pattern, search_string, replace_string, backup=False, subdir=False, pattern=False, display=False):
+    # Find files matching the pattern in the current directory and subdirectories if specified
+    if subdir:
         files = [os.path.join(root, f) for root, _, files in os.walk('.') for f in files if glob.fnmatch.fnmatch(f, file_pattern)]
     else:
-        files = [f for f in os.listdir('.') if glob.fnmatch.fnmatch(f, file_pattern)]
+        files = glob.glob(file_pattern)
 
+    count = 0
     for file in files:
         # Read the contents of the file
         with open(file, 'r') as f:
             content = f.read()
 
-        # Replace the string
-        new_content = content.replace(search_string, replace_string)
+        if pattern:
+            # Convert special characters in the search string and use regex
+            search_string = re.escape(search_string).replace(r'\*', '.*').replace(r'\?', '.')
+            new_content = re.sub(search_string, replace_string, content)
+        else:
+            # Convert special characters in the search and replace strings
+            search_string = search_string.encode().decode('unicode_escape')
+            replace_string = replace_string.encode().decode('unicode_escape')
+            new_content = content.replace(search_string, replace_string)
 
         # Create a backup if requested
         if backup:
@@ -33,35 +38,59 @@ def replace_string_in_files(file_pattern, search_string, replace_string, backup=
         with open(file, 'w') as f:
             f.write(new_content)
 
-        print(f"Processing file: {file}")
+        if display:
+            print(f"Processed file: {file}")
+        
+        count += 1
+
+    print(f"Total files processed: {count}")
 
 def display_usage():
-    print("Usage: replaceInFile <file_pattern> <search_string> <replace_string> [-b|--backup] [-r|--recursive]")
-    print("Description: Replace a string in files.")
+    print("Usage: replaceInFile <file_pattern> <search_string> <replace_string> [options]")
+    print("Description: Replace a string in text files.")
     print("Arguments:")
-    print("  <file_pattern>    The pattern to select the files to process")
-    print("  <search_string>   The string to search for")
-    print("  <replace_string>  The string to replace with")
+    print("  <file_pattern>    File pattern to match (e.g., *.txt)")
+    print("  <search_string>   String to search for")
+    print("  <replace_string>  String to replace with")
     print("Options:")
-    print("  -b, --backup      Create a backup of the files before replacing")
-    print("  -r, --recursive   Apply the replacement recursively in subdirectories")
+    print("  -b, --backup      Create a backup of each file")
+    print("  -s, --subdir      Process files in subdirectories")
+    print("  -p, --pattern     Use pattern matching for search string")
+    print("  -d, --display     Display the name of each processed file")
+    print("\nPattern search explanation:")
+    print("  Use '*' as a wildcard to match any number of characters.")
+    print("  Use '?' as a wildcard to match exactly one character.")
+    print("  Use '\\*' to match a literal '*' character.")
+    print("  Use '\\?' to match a literal '?' character.")
+    print("  Example: 'xyz*xzy' matches 'xyz' followed by any characters, then 'xzy'.")
+    print("  Example: 'xyz?xzy' matches 'xyz' followed by exactly one character, then 'xzy'.")
 
-if __name__ == "__main__":
+def main():
     print ("replaceInFile")
     print ("(c) by Olivier Pantalé 2024")
     print ("")
-    parser = argparse.ArgumentParser(description='Replace a string in files.', usage=argparse.SUPPRESS)
-    parser.add_argument('file_pattern', nargs='?', help='The pattern to select the files to process')
-    parser.add_argument('search_string', nargs='?', help='The string to search for')
-    parser.add_argument('replace_string', nargs='?', help='The string to replace with')
-    parser.add_argument('-b', '--backup', action='store_true', help='Create a backup of the files before replacing')
-    parser.add_argument('-r', '--recursive', action='store_true', help='Apply the replacement recursively in subdirectories')
+    parser = argparse.ArgumentParser(description='Replace a string in text files.', usage=argparse.SUPPRESS)
+    parser.add_argument('file_pattern', nargs='?', help='File pattern to match (e.g., *.txt)')
+    parser.add_argument('search_string', nargs='?', help='String to search for')
+    parser.add_argument('replace_string', nargs='?', help='String to replace with')
+    parser.add_argument('-b', '--backup', action='store_true', help='Create a backup of each file')
+    parser.add_argument('-s', '--subdir', action='store_true', help='Process files in subdirectories')
+    parser.add_argument('-p', '--pattern', action='store_true', help='Use pattern matching for search string')
+    parser.add_argument('-d', '--display', action='store_true', help='Display the name of each processed file')
+
+    if len(sys.argv) == 1:
+        display_usage()
+        sys.exit(0)
 
     args = parser.parse_args()
 
     if not all([args.file_pattern, args.search_string, args.replace_string]):
+        print("Error: Missing required arguments.")
         display_usage()
         sys.exit(1)
 
-    replace_string_in_files(args.file_pattern, args.search_string, args.replace_string, args.backup, args.recursive)
- 
+    replace_string_in_files(args.file_pattern, args.search_string, args.replace_string, 
+                            args.backup, args.subdir, args.pattern, args.display)
+
+if __name__ == '__main__':
+    main()
