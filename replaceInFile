@@ -1,40 +1,67 @@
 #!/usr/bin/env python3
+import os
 import sys
 import glob
 import shutil
-mandatoryArgs = 3
+import argparse
 
-def ReplaceInFile(files, old, new):
-    for file in files:
-        f = open(file,'r')
-        filedata = f.read()
-        f.close()
-        newdata = filedata.replace(old, new)
-        f = open(file,'w')
-        f.write(newdata)
-        f.close()
+def replace_string_in_files(file_pattern, search_string, replace_string, backup=False, recursive=False):
+    # Convert special characters in the search and replace strings
+    search_string = search_string.encode().decode('unicode_escape')
+    replace_string = replace_string.encode().decode('unicode_escape')
 
-def BackupFile(files):
+    # Find files matching the pattern in the current directory and its subdirectories
+    if recursive:
+        files = [os.path.join(root, f) for root, _, files in os.walk('.') for f in files if glob.fnmatch.fnmatch(f, file_pattern)]
+    else:
+        files = [f for f in os.listdir('.') if glob.fnmatch.fnmatch(f, file_pattern)]
+
     for file in files:
-        shutil.copyfile(file, file+'.bak')
-    
-# --------------------------------------------------------    
-# Start of the main program
-# --------------------------------------------------------    
-print ("replaceInFile")
-print ("(c) by Olivier Pantalé 2020")
-print ("")
-if (len(sys.argv) > mandatoryArgs):
-    pattern = sys.argv[1]
-    oldstring = sys.argv[2]
-    newstring = sys.argv[3]
-    filenames = glob.glob(pattern)
-    if (len(sys.argv) > mandatoryArgs+1):
-        if '--backup' in sys.argv[mandatoryArgs+1:]:
-            BackupFile(filenames)
-    ReplaceInFile(filenames, oldstring, newstring)
-else:
-    print ("Usage is the following:")
-    print ("    replaceInFile filename_pattern old_string new_string [options]")
-    print ("Options:")
-    print ("    --backup   backup the original file")
+        # Read the contents of the file
+        with open(file, 'r') as f:
+            content = f.read()
+
+        # Replace the string
+        new_content = content.replace(search_string, replace_string)
+
+        # Create a backup if requested
+        if backup:
+            backup_file = f"{os.path.splitext(file)[0]}-backup{os.path.splitext(file)[1]}"
+            shutil.copy2(file, backup_file)
+
+        # Write the new content to the file
+        with open(file, 'w') as f:
+            f.write(new_content)
+
+        print(f"Processing file: {file}")
+
+def display_usage():
+    print("Usage: replaceInFile <file_pattern> <search_string> <replace_string> [-b|--backup] [-r|--recursive]")
+    print("Description: Replace a string in files.")
+    print("Arguments:")
+    print("  <file_pattern>    The pattern to select the files to process")
+    print("  <search_string>   The string to search for")
+    print("  <replace_string>  The string to replace with")
+    print("Options:")
+    print("  -b, --backup      Create a backup of the files before replacing")
+    print("  -r, --recursive   Apply the replacement recursively in subdirectories")
+
+if __name__ == "__main__":
+    print ("replaceInFile")
+    print ("(c) by Olivier Pantalé 2024")
+    print ("")
+    parser = argparse.ArgumentParser(description='Replace a string in files.', usage=argparse.SUPPRESS)
+    parser.add_argument('file_pattern', nargs='?', help='The pattern to select the files to process')
+    parser.add_argument('search_string', nargs='?', help='The string to search for')
+    parser.add_argument('replace_string', nargs='?', help='The string to replace with')
+    parser.add_argument('-b', '--backup', action='store_true', help='Create a backup of the files before replacing')
+    parser.add_argument('-r', '--recursive', action='store_true', help='Apply the replacement recursively in subdirectories')
+
+    args = parser.parse_args()
+
+    if not all([args.file_pattern, args.search_string, args.replace_string]):
+        display_usage()
+        sys.exit(1)
+
+    replace_string_in_files(args.file_pattern, args.search_string, args.replace_string, args.backup, args.recursive)
+ 
