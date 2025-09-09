@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+import sys
+import os
+import shutil
+
+readmeVoid = "/home/pantale/SynologyDrive/Utils/Scripts/README.md.void" 
+
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------    
+print ("makeGitProject")
+print ("(c) by Olivier Pantalé 2021-2025")
+print ("")
+if (len(sys.argv) > 1):
+    directory = sys.argv[1]
+    print("Creating project :",directory)	
+    os.mkdir(directory)
+    shutil.copy(readmeVoid, directory+'/README.md')
+else:
+    print ("Usage is the following:")
+    print ("    makeGitProject path")
+

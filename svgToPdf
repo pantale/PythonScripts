@@ -51,7 +51,7 @@ if ('--silent' in sys.argv):
     talk = False
 else:
     print ("svgToPdf")
-    print ("(c) by Olivier Pantalé 2020")
+    print ("(c) by Olivier Pantalé 2020-2025")
     
 if ('--help' in sys.argv):
     print ("Usage is the following:")
@@ -60,7 +60,7 @@ if ('--help' in sys.argv):
     print ("    -dest [dest-dir]    destination directory")
     print ("    -file [filename]    filename to treat")
     print ("    -prefix [prefix]    prefix to append to dest name")
-    print ("    -delete             delete target files instread of converting files")
+    print ("    -delete             delete target files instead of converting files")
     print ("    --help              this help")
     print ("    --silent            no output, run in silence")
     exit(0)

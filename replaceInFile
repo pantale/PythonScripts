@@ -27,7 +27,7 @@ def replace_in_file(file_path, search_string, replace_string, pattern_search, ba
 
 def main():
     print ("replaceInFile")
-    print ("(c) by Olivier Pantalé 2024")
+    print ("(c) by Olivier Pantalé 2024-2025")
     print ("")
     parser = argparse.ArgumentParser(description="Replace strings in text files.")
     parser.add_argument("file_pattern", nargs='?', help="File name or wildcard pattern")
@@ -40,12 +40,12 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.file_pattern or not args.search_string or not args.replace_string:
+    if any(arg is None for arg in (args.file_pattern, args.search_string, args.replace_string)):
         parser.print_help()
         print("\nPattern search explanation:")
         print("When -p or --pattern is used, wildcard characters in the search string are supported:")
         print("'\\n' matches a new line") 
-        print("'\\p' matches a tabluation") 
+        print("'\\t' matches a tabluation") 
         print("'\\*' matches any number of characters") 
         print("'\\?' matches exactly one character")
         print("For example, 'before\\*after' would match 'before' followed by any characters, then 'after'")

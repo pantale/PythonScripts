@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+import sys
+import glob
+import shutil
+mandatoryArgs = 2
+
+# def ReplaceInFile(files, old, new):
+#     for file in files:
+#         f = open(file,'r')
+#         filedata = f.read()
+#         f.close()
+#         newdata = filedata.replace(old, new)
+#         f = open(file,'w')
+#         f.write(newdata)
+#         f.close()
+
+def BackupFile(file):
+    print('Backup file '+file+'to'+file+'.bak')
+    shutil.copyfile(file, file+'.bak')
+
+def removeBracket(aft):
+    lv = 0
+    ch = 0
+    for c in aft:
+        if c=='{': lv+=1
+        if c=='}': lv-=1
+        if (lv == 0): break
+        ch += 1
+    return aft[1:ch] + aft[ch+1:]
+
+def readFile(filename):
+    f = open(filename, 'r')
+    filedata = f.read()
+    f.close()
+    return filedata
+
+def writeFile(filename, text):
+    f = open(filename, 'w')
+    f.write(text)
+    f.close()
+    
+def removeTextColor(centerTxt, color):
+    se = '\\textcolor{'+color+'}'
+    sl = len(se)
+    while se in centerTxt:
+        st = centerTxt.find(se)
+        bef = centerTxt[:st]
+        aft = removeBracket(centerTxt[st+sl:])
+        centerTxt = bef + aft
+    return centerTxt
+
+# --------------------------------------------------------    
+# Start of the main program
+# --------------------------------------------------------    
+print ("removeLatexColor")
+print ("(c) by Olivier Pantalé 2023-2025")
+print ("")
+if (len(sys.argv) > mandatoryArgs):
+    filename = sys.argv[1]
+    color = sys.argv[2]
+    # newstring = sys.argv[3]
+    # filenames = glob.glob(pattern)
+    if (len(sys.argv) > mandatoryArgs+1):
+        if '--backup' in sys.argv[mandatoryArgs+1:]:
+            BackupFile(filename)
+            
+    filedata = readFile(filename)
+    start = filedata.find('\n\\begin{document}') + 18
+    end = filedata.find('\n\\end{document}') +1
+    startTxt = filedata[0:start]
+    centerTxt = filedata[start:end]
+    endTxt = filedata[end:]
+    centerTxt = removeTextColor(centerTxt, color)
+    writeFile(filename, startTxt+centerTxt+endTxt)
+else:
+    print ("Usage is the following:")
+    print ("    removeLatexColor filename color [options]")
+    print ("Options:")
+    print ("    --backup :   backup the original file")
