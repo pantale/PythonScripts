@@ -51,7 +51,7 @@ if ('--silent' in sys.argv):
     talk = False
 else:
     print ("svgToPdf")
-    print ("(c) by Olivier Pantalé 2020-2025")
+    print ("(c) by Olivier Pantalé 2020-2026")
     
 if ('--help' in sys.argv):
     print ("Usage is the following:")

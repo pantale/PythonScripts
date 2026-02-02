@@ -27,7 +27,7 @@ def replace_in_file(file_path, search_string, replace_string, pattern_search, ba
 
 def main():
     print ("replaceInFile")
-    print ("(c) by Olivier Pantalé 2024-2025")
+    print ("(c) by Olivier Pantalé 2024-2026")
     print ("")
     parser = argparse.ArgumentParser(description="Replace strings in text files.")
     parser.add_argument("file_pattern", nargs='?', help="File name or wildcard pattern")

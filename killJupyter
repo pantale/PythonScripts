@@ -10,7 +10,7 @@ mandatoryArgs = 0
 # Start of the main program
 # --------------------------------------------------------   
 print ("killJupyter")
-print ("(c) by Olivier Pantalé 2021-2025")
+print ("(c) by Olivier Pantalé 2021-2026")
     
 if ('--help' in sys.argv):
     print ("Usage is the following:")

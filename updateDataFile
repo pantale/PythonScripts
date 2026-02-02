@@ -137,7 +137,7 @@ def printUsage():
 # Start of the main program
 # --------------------------------------------------------     
 print ("updateDataFile")
-print ("(c) by Olivier Pantalé 2020-2025")
+print ("(c) by Olivier Pantalé 2020-2026")
 print ("")
 
 if ('--help' in sys.argv):

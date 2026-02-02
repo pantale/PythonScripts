@@ -113,7 +113,7 @@ def CommitAmendNoEdit():
 # Start of the main program
 # --------------------------------------------------------    
 print ("mygit")
-print ("(c) by Olivier Pantalé 2020-2025")
+print ("(c) by Olivier Pantalé 2020-2026")
 print ("")  
 
 if (len(sys.argv) > mandatoryArgs+1):

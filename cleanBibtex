@@ -17,7 +17,7 @@ def saveBibtex(filename, bib_database):
 # Start of the main program
 # --------------------------------------------------------    
 print ("cleanBibtex")
-print ("(c) by Olivier Pantalé 2024-2025")
+print ("(c) by Olivier Pantalé 2024-2026")
 print ("")
 
 remove = []

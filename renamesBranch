@@ -162,7 +162,7 @@ def rename_list_of_duplicates(p1, p2):
 # Start of the main program
 # --------------------------------------------------------    
 print ("renamesBranch")
-print ("(c) by Olivier Pantalé 2019-2025")
+print ("(c) by Olivier Pantalé 2019-2026")
 print ("")
 if (len(sys.argv) > 2):
     hashes_by_size_p1 = {}

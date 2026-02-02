@@ -20,7 +20,7 @@ def sendToTrash(lst):
 # Start of the main program
 # --------------------------------------------------------    
 print ("removeExcept")
-print ("(c) by Olivier Pantalé 2023-2025")
+print ("(c) by Olivier Pantalé 2023-2026")
 print ("")
 if (len(sys.argv) > 2):
     

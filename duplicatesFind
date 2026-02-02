@@ -118,7 +118,7 @@ def removeSingle(fd):
 # Start of the main program
 # --------------------------------------------------------    
 print ("duplicatesFind")
-print ("(c) by Olivier Pantalé 2022-2025")
+print ("(c) by Olivier Pantalé 2022-2026")
 print ("")
 if (len(sys.argv) > 1):
     

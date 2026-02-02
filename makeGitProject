@@ -9,7 +9,7 @@ readmeVoid = "/home/pantale/SynologyDrive/Utils/Scripts/README.md.void"
 # Start of the main program
 # --------------------------------------------------------    
 print ("makeGitProject")
-print ("(c) by Olivier Pantalé 2021-2025")
+print ("(c) by Olivier Pantalé 2021-2026")
 print ("")
 if (len(sys.argv) > 1):
     directory = sys.argv[1]

@@ -67,7 +67,7 @@ def display_usage():
 
 def main():
     print ("replaceInFile")
-    print ("(c) by Olivier Pantalé 2024-2025")
+    print ("(c) by Olivier Pantalé 2024-2026")
     print ("")
     parser = argparse.ArgumentParser(description='Replace a string in text files.', usage=argparse.SUPPRESS)
     parser.add_argument('file_pattern', nargs='?', help='File pattern to match (e.g., *.txt)')

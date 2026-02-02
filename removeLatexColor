@@ -53,7 +53,7 @@ def removeTextColor(centerTxt, color):
 # Start of the main program
 # --------------------------------------------------------    
 print ("removeLatexColor")
-print ("(c) by Olivier Pantalé 2023-2025")
+print ("(c) by Olivier Pantalé 2023-2026")
 print ("")
 if (len(sys.argv) > mandatoryArgs):
     filename = sys.argv[1]
