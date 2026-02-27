@@ -2,164 +2,244 @@
 import sys
 import os
 import hashlib
+from collections import defaultdict
+from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
+
 def chunk_reader(fobj, chunk_size=1024):
-    """Generator that reads a file in chunks of bytes"""
+    """Generator that reads a file in chunks of bytes."""
     while True:
         chunk = fobj.read(chunk_size)
         if not chunk:
             return
         yield chunk
 
-def get_hash(filename, first_chunk_only=False, hash=hashlib.sha1):
-    hashobj = hash()
-    file_object = open(filename, 'rb')
 
-    if first_chunk_only:
-        hashobj.update(file_object.read(1024))
+def get_hash(filename, first_chunk_only=False, hash_func=hashlib.sha1):
+    """Compute file hash.
+
+    If first_chunk_only=True, only the first 1024 bytes are hashed.
+    """
+    hashobj = hash_func()
+    try:
+        with open(filename, "rb") as fobj:
+            if first_chunk_only:
+                hashobj.update(fobj.read(1024))
+            else:
+                for chunk in chunk_reader(fobj):
+                    hashobj.update(chunk)
+    except OSError:
+        return None
+    return hashobj.digest()
+
+
+def create_hashes_by_size(path, recursive=True):
+    """Return dict: size -> [file1, file2, ...] and number of files."""
+    hashes_by_size = defaultdict(list)
+    number_of_files = 0
+
+    if recursive:
+        print(f"Building tree directory of: {path}")
     else:
-        for chunk in chunk_reader(file_object):
-            hashobj.update(chunk)
-    hashed = hashobj.digest()
+        print(f"Seeking directory of: {path}")
 
-    file_object.close()
-    return hashed
-    
-def create_hashes_by_size(hashes_by_size, path, rp):
-    numberOfFiles = 0
-    npaths = 0
-    # cpath = 0
-    
-    if (rp) :
-        print ("Building three directory of: " + path)
-    else:
-        print ("Seeking directory of: " + path)
-    
-    for dirpath, dirnames, filenames in os.walk(path):
-        npaths += 1
-        if (not rp) : break
+    npaths = sum(1 for _ in os.walk(path)) if recursive else 1
 
-    for dirpath, dirnames, filenames in tqdm(os.walk(path), total=npaths, desc='Loading', ncols=110, colour='#7f0000'):
-        # cpath += 1
-        # strout = ascii("Scanning: " + path + " " + str(cpath) + "/" + str(npaths) + " " + str(int(100.0*cpath/npaths)) + "%").strip('\'')
-        # print (strout, end='\r', flush=True)
+    for dirpath, dirnames, filenames in tqdm(
+        os.walk(path),
+        total=npaths,
+        desc="Loading",
+        ncols=110,
+        colour="#7f0000",
+    ):
         for filename in filenames:
             full_path = os.path.join(dirpath, filename)
             try:
-                # if the target is a symlink (soft one), this will 
-                # dereference it - change the value to the actual target file
                 full_path = os.path.realpath(full_path)
                 file_size = os.path.getsize(full_path)
-            except (OSError,):
-                # not accessible (permissions, etc) - pass on
+            except OSError:
                 continue
 
-            if (file_size != 0):
-                duplicate = hashes_by_size.get(file_size)
-                numberOfFiles += 1
-    
-                if duplicate:
-                    hashes_by_size[file_size].append(full_path)
-                else:
-                    hashes_by_size[file_size] = []  # create the list for this file size
-                    hashes_by_size[file_size].append(full_path)
-        if (not rp) : break
-    return numberOfFiles
+            if file_size <= 0:
+                continue
 
-def create_hashes_by_fasthash(hashes_by_size, hashes_on_1k):
-    numberOfFiles = 0
-    # cur = 0
-    tot = len(hashes_by_size)
-    for __, filenames in tqdm(hashes_by_size.items(), desc='Hash', total=tot, ncols=110, colour='#7f0000'):
-        # cur += 1
-        # print ("Fast Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "%", end='\r', flush=True)
+            number_of_files += 1
+            hashes_by_size[file_size].append(full_path)
+
+        if not recursive:
+            break
+
+    return hashes_by_size, number_of_files
+
+
+# ---------- FAST HASH (séquentiel + MP) ----------
+
+def create_hashes_by_fasthash(hashes_by_size):
+    """From size->list(files) build dict: small_hash(first KB)->[files], sequential."""
+    hashes_on_1k = defaultdict(list)
+    total_sizes = len(hashes_by_size)
+
+    for _, filenames in tqdm(
+        hashes_by_size.items(),
+        desc="Fast hash",
+        total=total_sizes,
+        ncols=110,
+        colour="#7f0000",
+    ):
         for filename in filenames:
-            try:
-                small_hash = get_hash(filename, first_chunk_only=True)
-            except (OSError,):
-                # the file access might've changed till the exec point got here 
+            small_hash = get_hash(filename, first_chunk_only=True)
+            if small_hash is None:
                 continue
-            numberOfFiles += 1
-            if hashes_on_1k.get(small_hash):
-                hashes_on_1k[small_hash].append(filename)
-            else:
-                hashes_on_1k[small_hash] = []          # create the list for this 1k hash
-                hashes_on_1k[small_hash].append(filename)
+            hashes_on_1k[small_hash].append(filename)
 
-def shorten(strout):
-    ln = 120
-    if len(strout) > ln:
-        strout = strout[0:70] + ' ... ' + strout[-50:]
+    return hashes_on_1k
+
+
+def worker_fast_hash(filename):
+    """Worker for fast hash (first 1 KB)."""
+    h = get_hash(filename, first_chunk_only=True)
+    return h, filename
+
+
+def create_hashes_by_fasthash_mp(hashes_by_size, processes, chunksize=16):
+    """Multiprocessing version of fast hash."""
+    hashes_on_1k = defaultdict(list)
+    all_files = [f for files in hashes_by_size.values() for f in files]
+    n_files = len(all_files)
+    if n_files == 0:
+        return hashes_on_1k
+
+    print(f"Fast Hash (multiprocessing) on {n_files} files using {processes} processes")
+
+    with Pool(processes=processes) as pool:
+        for h, filename in tqdm(
+            pool.imap_unordered(worker_fast_hash, all_files, chunksize=chunksize),
+            total=n_files,
+            ncols=110,
+            desc="Fast hash MP",
+            colour="#7f0000",
+        ):
+            if h is None:
+                continue
+            hashes_on_1k[h].append(filename)
+
+    return hashes_on_1k
+
+
+# ---------- FULL HASH (séquentiel + MP) ----------
+
+def shorten(strout, max_len=120):
+    if len(strout) > max_len:
+        return f"{strout[:70]} ... {strout[-50:]}"
     return strout
 
-def create_hashes_by_fullhash(hashes_on_1k, hashes_full):
-    numberOfFiles = 0
-    cur = 0
-    tot = len(hashes_on_1k)
-    strout = ""
-    lstrout = 0
-    for __, filenames in hashes_on_1k.items():
-        cur += 1
-        cfile = 0
-        for filename in filenames:
-            cfile += 1
-            print (' ' * (lstrout+1), end='\r', flush=True)
-            strout = ascii("Full Hash: " + str(cur) + "/" + str(tot) + " " + str(int(100.0*cur/tot)) + "% (" + str(cfile) + "/" + str(len(filenames)) + ") " + filename).strip('\'')
-            strout = shorten(strout)
-            lstrout = len(strout)
-            print (strout, end='\r', flush=True)
-            try:
-                full_hash = get_hash(filename, first_chunk_only=False)
-            except (OSError,):
-                # the file access might've changed till the exec point got here 
+
+def create_hashes_by_fullhash(hashes_on_1k):
+    """From small_hash->list(files) build dict: full_hash->list(files), sequential."""
+    hashes_full = defaultdict(list)
+
+    # aplatir la liste des fichiers à traiter
+    all_files = [f for files in hashes_on_1k.values() for f in files]
+    n_files = len(all_files)
+    if n_files == 0:
+        return hashes_full
+
+    # barre de progression unique (comme la version MP)
+    for filename in tqdm(
+        all_files,
+        total=n_files,
+        ncols=110,
+        desc="Full hash",
+        colour="#7f0000",
+    ):
+        full_hash = get_hash(filename, first_chunk_only=False)
+        if full_hash is None:
+            continue
+        hashes_full[full_hash].append(filename)
+
+    return hashes_full
+
+
+def worker_full_hash(filename):
+    """Worker for full hash (complete file)."""
+    h = get_hash(filename, first_chunk_only=False)
+    return h, filename
+
+
+def create_hashes_by_fullhash_mp(hashes_on_1k, processes, chunksize=8):
+    """Multiprocessing version of full hash."""
+    hashes_full = defaultdict(list)
+    all_files = [f for files in hashes_on_1k.values() for f in files]
+    n_files = len(all_files)
+    if n_files == 0:
+        return hashes_full
+
+    print(f"Full Hash (multiprocessing) on {n_files} files using {processes} processes")
+
+    with Pool(processes=processes) as pool:
+        for h, filename in tqdm(
+            pool.imap_unordered(worker_full_hash, all_files, chunksize=chunksize),
+            total=n_files,
+            ncols=110,
+            desc="Full hash MP",
+            colour="#7f0000",
+        ):
+            if h is None:
                 continue
-            numberOfFiles += 1
-            if hashes_full.get(full_hash):
-                hashes_full[full_hash].append(filename)
-            else:
-                hashes_full[full_hash] = []          # create the list for this 1k hash
-                hashes_full[full_hash].append(filename)
-  
+            hashes_full[h].append(filename)
+
+    return hashes_full
+
+
+# ---------- Utilitaires ----------
+
 def popItems(hashes_1, hashes_2):
-    hashes_1_reduced = {cle:element for cle,element in hashes_1.items() if cle in hashes_2}
-    hashes_2_reduced = {cle:element for cle,element in hashes_2.items() if cle in hashes_1}
+    common_keys = hashes_1.keys() & hashes_2.keys()
+    hashes_1_reduced = {k: hashes_1[k] for k in common_keys}
+    hashes_2_reduced = {k: hashes_2[k] for k in common_keys}
     return hashes_1_reduced, hashes_2_reduced
 
+
 def countItems(dictio):
-    it=0
-    for __, filenames in dictio.items():
-        for f in filenames:
-            it+=1
-    return it
-                           
+    return sum(len(files) for files in dictio.values())
+
+
 def list_of_duplicates(hashes_full2, hashes_full1):
     for hsh, files in hashes_full2.items():
+        ref = hashes_full1[hsh][0]
         for filename in files:
-            print("file", ascii(filename), "<=>", ascii(hashes_full1[hsh][0]))
+            print("file", ascii(filename), "<=>", ascii(ref))
+
 
 def get_size_of_duplicates(hashes_full):
     totSize = 0
-    for __, files in hashes_full.items():
+    for _, files in hashes_full.items():
         for filename in files:
-            totSize +=  os.path.getsize(filename)
+            try:
+                totSize += os.path.getsize(filename)
+            except OSError:
+                pass
     return totSize
 
+
 def getKbMbGb(val):
-    if (val > 1073741824):
-        return str(int(100*val/1073741824) / 100) + ' Gb'
-    if (val > 1048576):
-        return str(int(100*val/1048576) / 100) + ' Mb'
-    return str(int(100*val/1024) / 100) + ' Kb'
-    
+    if val > 1073741824:
+        return f"{int(100 * val / 1073741824) / 100} Gb"
+    if val > 1048576:
+        return f"{int(100 * val / 1048576) / 100} Mb"
+    return f"{int(100 * val / 1024) / 100} Kb"
+
+
 def delete_list_of_duplicates(hashes_full):
-    for __, files in hashes_full.items():
+    for _, files in hashes_full.items():
         for filename in files:
             try:
                 os.remove(filename)
             except OSError:
                 pass
-            
+
+
 def remove_empty_dir(path):
     try:
         os.rmdir(path)
@@ -167,83 +247,158 @@ def remove_empty_dir(path):
     except OSError:
         return 0
 
+
 def remove_empty_dirs(path):
     empty = 0
-    for root, dirnames, filenames in os.walk(path, topdown=False):
+    for root, dirnames, _ in os.walk(path, topdown=False):
         for dirname in dirnames:
             empty += remove_empty_dir(os.path.realpath(os.path.join(root, dirname)))
     return empty
-    
-# --------------------------------------------------------    
-# Start of the main program
-# --------------------------------------------------------    
-print ("duplicatesBranch")
-print ("(c) by Olivier Pantalé 2019-2026")
-print ("")
-if (len(sys.argv) > 2):
+
+
+def norm_relpath(root, path):
+    """Chemin relatif normalisé (séparateurs unifiés)."""
+    rel = os.path.relpath(path, root)
+    return rel.replace(os.sep, "/")
+
+
+# ---------- main ----------
+
+def main():
+    print("duplicatesBranch (multiprocessing options)")
+    print("(c) by Olivier Pantalé 2019-2026\n")
+
+    if len(sys.argv) <= 2:
+        print("Usage is the following:")
+        print("    duplicatesBranch keep_path delete_path [options]")
+        print("Options:")
+        print("    --print      displays the list of files")
+        print("    --delete     deletes duplicated files")
+        print("    --empty      removes empty sub-directories")
+        print("    --nrk        non-recursive search for keep_path")
+        print("    --nrd        non-recursive search for delete_path")
+        print("    --mp         parallelize fast & full hash")
+        print("    --mpfast     parallelize fast hash")
+        print("    --mpfull     parallelize full hash (recommended)")
+        print("    --proc N     use N processes")
+        print("    --samePath   only match files with same relative subdirectory")
+        return
+
+    keep_path = os.path.realpath(sys.argv[1])
+    delete_path = os.path.realpath(sys.argv[2])
+    options = sys.argv[3:]
+
+    rpk = "--nrk" not in options
+    rpd = "--nrd" not in options
+    same_path = "--samePath" in options
+    # --mp active à la fois fast et full
+    use_mp = "--mp" in options
+    use_mp_fast = ("--mpfast" in options) or use_mp
+    use_mp_full = ("--mpfull" in options) or use_mp
+
+    # default: ncore - 1
+    processes = max(1, cpu_count() - 1)
+    if "--proc" in options:
+        idx = options.index("--proc")
+        try:
+            processes = int(options[idx + 1])
+        except (IndexError, ValueError):
+            processes = max(1, cpu_count() - 1)
+
     hashes_by_size_p1 = {}
     hashes_by_size_p2 = {}
     hashes_on_1k_p1 = {}
     hashes_on_1k_p2 = {}
     hashes_full_p1 = {}
     hashes_full_p2 = {}
-    rpk = True
-    rpd = True
-    
-    if (len(sys.argv) > 3):
-        if '--nrk' in sys.argv[3:]: rpk = False
-        if '--nrd' in sys.argv[3:]: rpd = False
-            
-    nfiles1 = create_hashes_by_size(hashes_by_size_p1, sys.argv[1], rpk)
-    print(nfiles1, "files scanned in directory:", sys.argv[1])
-    
-    nfiles2 = create_hashes_by_size(hashes_by_size_p2, sys.argv[2], rpd)
-    print(nfiles2, "files scanned in directory:", sys.argv[2])
-   
-    # reduce to common files
+
+    hashes_by_size_p1, nfiles1 = create_hashes_by_size(keep_path, recursive=rpk)
+    print(nfiles1, "files scanned in directory:", keep_path)
+
+    hashes_by_size_p2, nfiles2 = create_hashes_by_size(delete_path, recursive=rpd)
+    print(nfiles2, "files scanned in directory:", delete_path)
+
+    # reduce to common sizes
     hashes_by_size_p1, hashes_by_size_p2 = popItems(hashes_by_size_p1, hashes_by_size_p2)
-    
+
     print("Left Fast Hash")
-    create_hashes_by_fasthash(hashes_by_size_p1, hashes_on_1k_p1)
-    print("Right Fast Hash             ")
-    create_hashes_by_fasthash(hashes_by_size_p2, hashes_on_1k_p2)
-     # reduce to common files
+    if use_mp_fast:
+        hashes_on_1k_p1 = create_hashes_by_fasthash_mp(
+            hashes_by_size_p1, processes=processes, chunksize=16
+        )
+    else:
+        hashes_on_1k_p1 = create_hashes_by_fasthash(hashes_by_size_p1)
+
+    print("Right Fast Hash")
+    if use_mp_fast:
+        hashes_on_1k_p2 = create_hashes_by_fasthash_mp(
+            hashes_by_size_p2, processes=processes, chunksize=16
+        )
+    else:
+        hashes_on_1k_p2 = create_hashes_by_fasthash(hashes_by_size_p2)
+
+    # reduce to common fast hashes
     hashes_on_1k_p1, hashes_on_1k_p2 = popItems(hashes_on_1k_p1, hashes_on_1k_p2)
-   
-    nbr = countItems(hashes_on_1k_p2) 
-    print('\n', nbr,"duplicated candidates after Fast Hash phase")
+
+    nbr = countItems(hashes_on_1k_p2)
+    print("\n", nbr, "duplicated candidates after Fast Hash phase")
 
     print("Left Full Hash")
-    create_hashes_by_fullhash(hashes_on_1k_p1, hashes_full_p1)
+    if use_mp_full:
+        hashes_full_p1 = create_hashes_by_fullhash_mp(
+            hashes_on_1k_p1, processes=processes, chunksize=16
+        )
+    else:
+        hashes_full_p1 = create_hashes_by_fullhash(hashes_on_1k_p1)
+
     print("\nRight Full Hash")
-    create_hashes_by_fullhash(hashes_on_1k_p2, hashes_full_p2)
-     # reduce to common files
+    if use_mp_full:
+        hashes_full_p2 = create_hashes_by_fullhash_mp(
+            hashes_on_1k_p2, processes=processes, chunksize=16
+        )
+    else:
+        hashes_full_p2 = create_hashes_by_fullhash(hashes_on_1k_p2)
+
+    # reduce to common full hashes
     hashes_full_p1, hashes_full_p2 = popItems(hashes_full_p1, hashes_full_p2)
 
-    nbr = countItems(hashes_full_p2) 
-    print('\n', nbr, 'duplicates found (' + getKbMbGb(get_size_of_duplicates(hashes_full_p2)) + ')')
-    
-    if (len(sys.argv) > 3):
-        if '--print' in sys.argv[3:]:
-            list_of_duplicates(hashes_full_p2, hashes_full_p1)
-        if '--delete' in sys.argv[3:]:
-            print("DELETING FILES")
-            delete_list_of_duplicates(hashes_full_p2)
-        if '--empty' in sys.argv[3:]:
-            print("REMOVING EMPTY DIRECTORIES")
-            empty = remove_empty_dirs(sys.argv[2])
-            empty += remove_empty_dir(sys.argv[2])
-            if empty > 1:
-                print(empty,'directories removed')
-            else:
-                print(empty,'directory removed')
-                
-else:
-    print ("Usage is the following:")
-    print ("    duplicateBranch keep_path delete_path [options]")
-    print ("Options:")
-    print ("    --print   displays the list of files")
-    print ("    --delete  deletes duplicated files")
-    print ("    --empty   removes empty sub-directories")
-    print ("    --nrk     non-recursive search for keep_path")
-    print ("    --nrd     non-recursive search for delete_path")
+    # optional samePath filtering
+    if same_path:
+        hashes_full_p2_same = {}
+        for hsh, files2 in hashes_full_p2.items():
+            files1 = hashes_full_p1.get(hsh, [])
+            if not files1:
+                continue
+
+            rel1 = {norm_relpath(keep_path, f1) for f1 in files1}
+
+            filtered_files2 = [
+                f2 for f2 in files2
+                if norm_relpath(delete_path, f2) in rel1
+            ]
+            if filtered_files2:
+                hashes_full_p2_same[hsh] = filtered_files2
+
+        hashes_full_p2 = hashes_full_p2_same
+
+    nbr = countItems(hashes_full_p2)
+    print("\n", nbr, "duplicates found (" + getKbMbGb(get_size_of_duplicates(hashes_full_p2)) + ")")
+
+    if "--print" in options:
+        list_of_duplicates(hashes_full_p2, hashes_full_p1)
+    if "--delete" in options:
+        print("DELETING FILES")
+        delete_list_of_duplicates(hashes_full_p2)
+    if "--empty" in options:
+        print("REMOVING EMPTY DIRECTORIES")
+        empty = remove_empty_dirs(delete_path)
+        empty += remove_empty_dir(delete_path)
+        if empty > 1:
+            print(empty, "directories removed")
+        else:
+            print(empty, "directory removed")
+
+
+if __name__ == "__main__":
+    main()
+
