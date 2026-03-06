@@ -1,89 +1,234 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
 import sys
 import glob
 import os
+from pathlib import Path
+from subprocess import run, CalledProcessError
+import argparse
 
-mandatoryArgs = 1
-talk = True
-treated = 0
-convert = True
-deleteTarget = False
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None  # argcomplete is optional; script still works without it
 
-def ConvertFile(svgfile, pdffile):
-    global treated
-    treated += 1
-    command = 'inkscape ' + svgfile + ' --export-area-drawing -o ' + pdffile
-    os.system(command)
-    return
 
-def DeleteFile(file):
-    global treated
-    treated += 1
-    os.remove(file)
-    return
+def convert_file(svgfile: Path, pdffile: Path, dry_run: bool, verbose: bool) -> bool:
+    """
+    Convert a single SVG file to PDF using Inkscape.
 
-def TreatFiles(files):
+    Returns True if the file has been processed (or would be processed in dry-run mode).
+    """
+    if dry_run:
+        if verbose:
+            print(f"[DRY-RUN] Convert {svgfile} -> {pdffile}")
+        return True
+
+    cmd = [
+        "inkscape",
+        str(svgfile),
+        "--export-area-drawing",
+        "-o",
+        str(pdffile),
+    ]
+
+    try:
+        run(cmd, check=True)
+        return True
+    except FileNotFoundError:
+        print("Error: 'inkscape' command not found. Please install Inkscape or fix your PATH.")
+        sys.exit(1)
+    except CalledProcessError as e:
+        print(f"Error: Inkscape failed on '{svgfile}' with return code {e.returncode}.")
+        return False
+
+
+def delete_file(path: Path, dry_run: bool, verbose: bool) -> bool:
+    """
+    Delete a single file (used for deleting PDF targets).
+
+    Returns True if the file has been processed (or would be processed in dry-run mode).
+    """
+    if dry_run:
+        if verbose:
+            print(f"[DRY-RUN] Delete {path}")
+        return True
+
+    try:
+        path.unlink()
+        if verbose:
+            print(f"Delete {path}")
+        return True
+    except FileNotFoundError:
+        # If the file does not exist, we simply ignore the error
+        if verbose:
+            print(f"File to delete not found: {path}")
+        return False
+    except OSError as e:
+        print(f"Error: unable to delete '{path}': {e}")
+        return False
+
+
+def treat_files(
+    files,
+    dest_dir: Path,
+    prefix_name: str,
+    convert: bool,
+    delete_target: bool,
+    dry_run: bool,
+    verbose: bool,
+) -> int:
+    """
+    Process all input SVG files: convert or delete corresponding PDF files.
+
+    Returns the number of processed files (converted or deleted, real or dry-run).
+    """
+    treated = 0
+
     for svgfile in files:
-        pdffile = dest_dir + '/' + prefix_name + svgfile.replace('.svg', '.pdf')
-        if (convert):
-            if (os.path.isfile(pdffile)):
-                svg_time = os.path.getmtime(svgfile)
+        svg_path = Path(svgfile)
+        pdf_name = prefix_name + svg_path.name.replace(".svg", ".pdf")
+        pdffile = dest_dir / pdf_name
+
+        # Conversion mode
+        if convert:
+            # Only convert if target is missing or outdated
+            if pdffile.is_file():
+                svg_time = os.path.getmtime(svg_path)
                 pdf_time = os.path.getmtime(pdffile)
-                if (svg_time > pdf_time):
-                    if (talk): print('Convert '+svgfile+' -> '+pdffile)
-                    ConvertFile(svgfile, pdffile)
+                if svg_time > pdf_time:
+                    if verbose and not dry_run:
+                        print(f"Convert {svg_path} -> {pdffile}")
+                    if convert_file(svg_path, pdffile, dry_run, verbose):
+                        treated += 1
             else:
-                ConvertFile(svgfile, pdffile)
-                if (talk): print('Convert '+svgfile+' -> '+pdffile)
-        if (deleteTarget):
-            DeleteFile(pdffile)
+                if verbose and not dry_run:
+                    print(f"Convert {svg_path} -> {pdffile}")
+                if convert_file(svg_path, pdffile, dry_run, verbose):
+                    treated += 1
 
-def getArgument(argtoget, default):
-    if (argtoget in sys.argv):
-        for i in range(len(sys.argv)-1):
-            if (sys.argv[i] == argtoget): return sys.argv[i+1]
-    return default
+        # Deletion mode
+        if delete_target:
+            if delete_file(pdffile, dry_run, verbose):
+                treated += 1
 
-# --------------------------------------------------------    
-# Start of the main program
-# --------------------------------------------------------   
-if ('--silent' in sys.argv):
-    talk = False
-else:
-    print ("svgToPdf")
-    print ("(c) by Olivier Pantalé 2020-2026")
-    
-if ('--help' in sys.argv):
-    print ("Usage is the following:")
-    print ("    svgToPdf [options]")
-    print ("Options:")
-    print ("    -dest [dest-dir]    destination directory")
-    print ("    -file [filename]    filename to treat")
-    print ("    -prefix [prefix]    prefix to append to dest name")
-    print ("    -delete             delete target files instead of converting files")
-    print ("    --help              this help")
-    print ("    --silent            no output, run in silence")
-    exit(0)
+    return treated
 
-dest_dir = getArgument('-dest', '.')
-prefix_name = getArgument('-prefix', '')
 
-if ('-file' in sys.argv):
-    filenames = [getArgument('-file', '')]
-else:
-    pattern = '*.svg'
-    filenames = glob.glob(pattern)
-    
-if ('-delete' in sys.argv):
-    convert = False
-    deleteTarget = True
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build and return the command-line argument parser."""
+    parser = argparse.ArgumentParser(
+        description="Convert SVG files to PDF using Inkscape."
+    )
 
-TreatFiles(filenames)
-if (talk):
-    if (treated == 0):
-        print('All files already up to date')
+    parser.add_argument(
+        "-d", "--dest",
+        dest="dest_dir",
+        default=".",
+        help="Destination directory for PDF files (default: current directory).",
+    )
+
+    parser.add_argument(
+        "-f", "--file",
+        dest="file",
+        help="Single SVG filename to treat.",
+    )
+
+    parser.add_argument(
+        "-p", "--prefix",
+        dest="prefix",
+        default="",
+        help="Prefix to prepend to destination filename.",
+    )
+
+    parser.add_argument(
+        "--delete",
+        dest="delete",
+        action="store_true",
+        help="Delete target PDF files instead of converting.",
+    )
+
+    parser.add_argument(
+        "--silent",
+        dest="silent",
+        action="store_true",
+        help="No output, run in silence.",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Show what would be done, but do not actually convert/delete files.",
+    )
+
+    return parser
+
+
+def main() -> None:
+    parser = build_arg_parser()
+
+    # Enable argcomplete if available
+    if argcomplete is not None:
+        # Note: to enable globally in bash:
+        #   eval "$(register-python-argcomplete svgToPdf)"
+        argcomplete.autocomplete(parser)
+
+    args = parser.parse_args()
+
+    verbose = not args.silent
+
+    if verbose:
+        print("svgToPdf")
+        print("(c) by Olivier Pantalé 2020-2026")
+
+    # Resolve destination directory
+    dest_dir = Path(args.dest_dir).expanduser().resolve()
+    if not dest_dir.exists():
+        # Create destination directory if it does not exist
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"Error: unable to create destination directory '{dest_dir}': {e}")
+            sys.exit(1)
+
+    prefix_name = args.prefix
+
+    # Determine which SVG files to process
+    if args.file:
+        filenames = [args.file]
     else:
-        if (treated == 1):
-            print(treated,'file converted')
+        filenames = glob.glob("*.svg")
+
+    if not filenames and verbose:
+        print("No SVG files found.")
+
+    # Mode selection
+    convert = not args.delete
+    delete_target = args.delete
+
+    treated = treat_files(
+        filenames,
+        dest_dir,
+        prefix_name,
+        convert=convert,
+        delete_target=delete_target,
+        dry_run=args.dry_run,
+        verbose=verbose,
+    )
+
+    if verbose:
+        # In dry-run mode, clarify that nothing was actually changed
+        suffix = " (dry-run)" if args.dry_run else ""
+        if treated == 0:
+            print(f"No files processed{suffix}")
+        elif treated == 1:
+            print(f"{treated} file processed{suffix}")
         else:
-            print(treated,'files converted')
+            print(f"{treated} files processed{suffix}")
+
+
+if __name__ == "__main__":
+    main()
+

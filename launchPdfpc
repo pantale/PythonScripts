@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import sys
+import subprocess
+from pathlib import Path
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print(f"Usage: {Path(sys.argv[0]).name} <fichier.pdfpc|fichier.pdf>")
+        sys.exit(1)
+
+    input_path = Path(sys.argv[1])
+    # Remplace l’extension .pdfpc par .pdf, sinon laisse tel quel
+    if input_path.suffix == ".pdfpc":
+        pdf_path = input_path.with_suffix(".pdf")
+    else:
+        pdf_path = input_path
+
+    if not pdf_path.is_file():
+        print(f"Erreur: fichier introuvable: {pdf_path}")
+        sys.exit(1)
+
+    cmd = [
+        "pdfpc",
+        "--presenter-screen=0",  # forcer l’écran du laptop comme écran présentateur
+        "--presentation-screen=1",  # forcer l’écran du laptop comme écran présentateur
+        str(pdf_path),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        print("Erreur: pdfpc n’est pas installé ou introuvable dans le PATH.")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"pdfpc a échoué avec le code retour {e.returncode}.")
+        sys.exit(e.returncode)
+
+if __name__ == "__main__":
+    main()
+

@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
 import sys
 import os
 import hashlib
+import argparse
 from collections import defaultdict
 from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
+from os.path import basename
 
+from tqdm import tqdm
+from send2trash import send2trash
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None  # argcomplete est optionnel
+
+
+# ---------- Lecture de fichiers / hash ----------
 
 def chunk_reader(fobj, chunk_size=1024):
-    """Generator that reads a file in chunks of bytes."""
+    """Iterateur de blocs pour lire un fichier par morceaux."""
     while True:
         chunk = fobj.read(chunk_size)
         if not chunk:
@@ -17,9 +30,9 @@ def chunk_reader(fobj, chunk_size=1024):
 
 
 def get_hash(filename, first_chunk_only=False, hash_func=hashlib.sha1):
-    """Compute file hash.
+    """Calcule le hash (SHA1 par défaut) d'un fichier.
 
-    If first_chunk_only=True, only the first 1024 bytes are hashed.
+    Si first_chunk_only est True, ne lit que les 1024 premiers octets.
     """
     hashobj = hash_func()
     try:
@@ -35,7 +48,7 @@ def get_hash(filename, first_chunk_only=False, hash_func=hashlib.sha1):
 
 
 def create_hashes_by_size(path, recursive=True):
-    """Return dict: size -> [file1, file2, ...] and number of files."""
+    """Retourne un dict {taille: [fichiers]} et le nombre de fichiers scannés."""
     hashes_by_size = defaultdict(list)
     number_of_files = 0
 
@@ -76,7 +89,7 @@ def create_hashes_by_size(path, recursive=True):
 # ---------- FAST HASH (séquentiel + MP) ----------
 
 def create_hashes_by_fasthash(hashes_by_size):
-    """From size->list(files) build dict: small_hash(first KB)->[files], sequential."""
+    """Phase de fast hash (1 kio) séquentielle, à partir du regroupement par taille."""
     hashes_on_1k = defaultdict(list)
     total_sizes = len(hashes_by_size)
 
@@ -97,13 +110,13 @@ def create_hashes_by_fasthash(hashes_by_size):
 
 
 def worker_fast_hash(filename):
-    """Worker for fast hash (first 1 KB)."""
+    """Worker multiprocessing pour le fast hash."""
     h = get_hash(filename, first_chunk_only=True)
     return h, filename
 
 
 def create_hashes_by_fasthash_mp(hashes_by_size, processes, chunksize=16):
-    """Multiprocessing version of fast hash."""
+    """Phase de fast hash (1 kio) parallèle."""
     hashes_on_1k = defaultdict(list)
     all_files = [f for files in hashes_by_size.values() for f in files]
     n_files = len(all_files)
@@ -129,23 +142,14 @@ def create_hashes_by_fasthash_mp(hashes_by_size, processes, chunksize=16):
 
 # ---------- FULL HASH (séquentiel + MP) ----------
 
-def shorten(strout, max_len=120):
-    if len(strout) > max_len:
-        return f"{strout[:70]} ... {strout[-50:]}"
-    return strout
-
-
 def create_hashes_by_fullhash(hashes_on_1k):
-    """From small_hash->list(files) build dict: full_hash->list(files), sequential."""
+    """Phase de full hash séquentielle à partir des groupes de fast hash."""
     hashes_full = defaultdict(list)
-
-    # aplatir la liste des fichiers à traiter
     all_files = [f for files in hashes_on_1k.values() for f in files]
     n_files = len(all_files)
     if n_files == 0:
         return hashes_full
 
-    # barre de progression unique (comme la version MP)
     for filename in tqdm(
         all_files,
         total=n_files,
@@ -162,13 +166,13 @@ def create_hashes_by_fullhash(hashes_on_1k):
 
 
 def worker_full_hash(filename):
-    """Worker for full hash (complete file)."""
+    """Worker multiprocessing pour le full hash."""
     h = get_hash(filename, first_chunk_only=False)
     return h, filename
 
 
 def create_hashes_by_fullhash_mp(hashes_on_1k, processes, chunksize=8):
-    """Multiprocessing version of full hash."""
+    """Phase de full hash parallèle."""
     hashes_full = defaultdict(list)
     all_files = [f for files in hashes_on_1k.values() for f in files]
     n_files = len(all_files)
@@ -194,7 +198,14 @@ def create_hashes_by_fullhash_mp(hashes_on_1k, processes, chunksize=8):
 
 # ---------- Utilitaires ----------
 
+def norm_relpath(root, path):
+    """Chemin relatif normalisé (séparateur '/')."""
+    rel = os.path.relpath(path, root)
+    return rel.replace(os.sep, "/")
+
+
 def popItems(hashes_1, hashes_2):
+    """Réduction à l'intersection des clés des deux dictionnaires."""
     common_keys = hashes_1.keys() & hashes_2.keys()
     hashes_1_reduced = {k: hashes_1[k] for k in common_keys}
     hashes_2_reduced = {k: hashes_2[k] for k in common_keys}
@@ -202,10 +213,12 @@ def popItems(hashes_1, hashes_2):
 
 
 def countItems(dictio):
+    """Compte le nombre total de fichiers dans un dict {clé: [fichiers]}."""
     return sum(len(files) for files in dictio.values())
 
 
 def list_of_duplicates(hashes_full2, hashes_full1):
+    """Affiche les couples de doublons (delete_path <=> keep_path)."""
     for hsh, files in hashes_full2.items():
         ref = hashes_full1[hsh][0]
         for filename in files:
@@ -213,6 +226,7 @@ def list_of_duplicates(hashes_full2, hashes_full1):
 
 
 def get_size_of_duplicates(hashes_full):
+    """Calcule la taille totale des doublons."""
     totSize = 0
     for _, files in hashes_full.items():
         for filename in files:
@@ -224,6 +238,7 @@ def get_size_of_duplicates(hashes_full):
 
 
 def getKbMbGb(val):
+    """Formate une taille en Kb / Mb / Gb."""
     if val > 1073741824:
         return f"{int(100 * val / 1073741824) / 100} Gb"
     if val > 1048576:
@@ -231,79 +246,201 @@ def getKbMbGb(val):
     return f"{int(100 * val / 1024) / 100} Kb"
 
 
-def delete_list_of_duplicates(hashes_full):
+# ---------- Suppression de fichiers ----------
+
+def delete_list_of_duplicates_trash(hashes_full, dry_run=False):
+    """Envoie les fichiers doublons à la corbeille (send2trash) ou dry-run,
+    en affichant les erreurs éventuelles.
+    """
+    count = 0
+    size = 0
     for _, files in hashes_full.items():
         for filename in files:
+            if dry_run:
+                print("DRY-RUN trash file:", filename)
+                continue
+            try:
+                s = os.path.getsize(filename)
+            except OSError:
+                s = 0
+            try:
+                send2trash(filename)
+                count += 1
+                size += s
+                print("TRASHED:", filename)
+            except Exception as e:
+                print("ERROR trashing:", filename, "->", repr(e))
+    if not dry_run:
+        print(f"{count} files sent to trash ({getKbMbGb(size)})")
+
+
+def delete_list_of_duplicates_rm(hashes_full, dry_run=False):
+    """Supprime définitivement les fichiers doublons (os.remove) ou dry-run."""
+    count = 0
+    size = 0
+    for _, files in hashes_full.items():
+        for filename in files:
+            if dry_run:
+                print("DRY-RUN rm file:", filename)
+                continue
+            try:
+                s = os.path.getsize(filename)
+            except OSError:
+                s = 0
             try:
                 os.remove(filename)
-            except OSError:
-                pass
+                count += 1
+                size += s
+                print("REMOVED:", filename)
+            except Exception as e:
+                print("ERROR removing:", filename, "->", repr(e))
+    if not dry_run:
+        print(f"{count} files permanently removed ({getKbMbGb(size)})")
 
 
-def remove_empty_dir(path):
+# ---------- Suppression de répertoires vides ----------
+
+def remove_empty_dir(path, dry_run=False):
+    """Envoie à la corbeille un répertoire uniquement s'il est vide, ou dry-run."""
     try:
-        os.rmdir(path)
+        # Vérifie que le répertoire est vide (pas de fichiers ni de sous-répertoires)
+        if any(os.scandir(path)):
+            return 0
+    except FileNotFoundError:
+        # Déjà supprimé / déplacé
+        return 0
+    except NotADirectoryError:
+        # Juste au cas où on passerait un fichier ici
+        return 0
+
+    if dry_run:
+        print("DRY-RUN delete directory:", path)
         return 1
-    except OSError:
+
+    try:
+        send2trash(path)
+        print("TRASHED DIR:", path)
+        return 1
+    except OSError as e:
+        print("ERROR trashing dir:", path, "->", repr(e))
         return 0
 
 
-def remove_empty_dirs(path):
+def remove_empty_dirs(path, dry_run=False):
+    """Parcourt l'arborescence et envoie les sous-répertoires vides à la corbeille."""
     empty = 0
     for root, dirnames, _ in os.walk(path, topdown=False):
         for dirname in dirnames:
-            empty += remove_empty_dir(os.path.realpath(os.path.join(root, dirname)))
+            empty += remove_empty_dir(
+                os.path.realpath(os.path.join(root, dirname)),
+                dry_run=dry_run,
+            )
     return empty
 
 
-def norm_relpath(root, path):
-    """Chemin relatif normalisé (séparateurs unifiés)."""
-    rel = os.path.relpath(path, root)
-    return rel.replace(os.sep, "/")
+# ---------- argparse + main ----------
 
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="duplicatesBranch",
+        description="Find duplicate files between two trees, optionally delete them.",
+    )
 
-# ---------- main ----------
+    parser.add_argument("keep_path", help="Directory to keep (reference tree)")
+    parser.add_argument("delete_path", help="Directory where duplicates may be removed")
+
+    parser.add_argument(
+        "--print", dest="do_print", action="store_true",
+        help="Display the list of duplicate files"
+    )
+
+    parser.add_argument(
+        "--delete", dest="do_delete", action="store_true",
+        help="Delete duplicate files in delete_path (send to trash)"
+    )
+
+    parser.add_argument(
+        "--rm", dest="do_rm", action="store_true",
+        help="Permanently remove duplicate files in delete_path (no trash)"
+    )
+
+    parser.add_argument(
+        "--empty", dest="do_empty", action="store_true",
+        help="Remove empty sub-directories in delete_path (send to trash)"
+    )
+
+    parser.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Do not delete or trash anything, only show what would be removed"
+    )
+
+    parser.add_argument(
+        "--nrk", dest="nrk", action="store_true",
+        help="Non-recursive search for keep_path"
+    )
+
+    parser.add_argument(
+        "--nrd", dest="nrd", action="store_true",
+        help="Non-recursive search for delete_path"
+    )
+
+    parser.add_argument(
+        "--mp", dest="mp", action="store_true",
+        help="Parallelize fast & full hash"
+    )
+
+    parser.add_argument(
+        "--mpfast", dest="mpfast", action="store_true",
+        help="Parallelize fast hash"
+    )
+
+    parser.add_argument(
+        "--mpfull", dest="mpfull", action="store_true",
+        help="Parallelize full hash (recommended)"
+    )
+
+    parser.add_argument(
+        "--proc", type=int, metavar="N",
+        help="Number of processes to use (default: ncore-1)"
+    )
+
+    parser.add_argument(
+        "--samePath", dest="same_path", action="store_true",
+        help="Only match files with same relative subdirectory"
+    )
+
+    parser.add_argument(
+        "--sameName", dest="same_name", action="store_true",
+        help="Only match files with same filename"
+    )
+
+    return parser
+
 
 def main():
-    print("duplicatesBranch (multiprocessing options)")
+    print("duplicatesBranch")
     print("(c) by Olivier Pantalé 2019-2026\n")
 
-    if len(sys.argv) <= 2:
-        print("Usage is the following:")
-        print("    duplicatesBranch keep_path delete_path [options]")
-        print("Options:")
-        print("    --print      displays the list of files")
-        print("    --delete     deletes duplicated files")
-        print("    --empty      removes empty sub-directories")
-        print("    --nrk        non-recursive search for keep_path")
-        print("    --nrd        non-recursive search for delete_path")
-        print("    --mp         parallelize fast & full hash")
-        print("    --mpfast     parallelize fast hash")
-        print("    --mpfull     parallelize full hash (recommended)")
-        print("    --proc N     use N processes")
-        print("    --samePath   only match files with same relative subdirectory")
-        return
+    parser = build_parser()
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
+    args = parser.parse_args()
 
-    keep_path = os.path.realpath(sys.argv[1])
-    delete_path = os.path.realpath(sys.argv[2])
-    options = sys.argv[3:]
+    keep_path = os.path.realpath(args.keep_path)
+    delete_path = os.path.realpath(args.delete_path)
 
-    rpk = "--nrk" not in options
-    rpd = "--nrd" not in options
-    same_path = "--samePath" in options
-    # --mp active à la fois fast et full
-    use_mp = "--mp" in options
-    use_mp_fast = ("--mpfast" in options) or use_mp
-    use_mp_full = ("--mpfull" in options) or use_mp
+    rpk = not args.nrk
+    rpd = not args.nrd
+    same_path = args.same_path
+    same_name = args.same_name
+    dry_run = args.dry_run
 
-    # default: ncore - 1
-    processes = max(1, cpu_count() - 1)
-    if "--proc" in options:
-        idx = options.index("--proc")
-        try:
-            processes = int(options[idx + 1])
-        except (IndexError, ValueError):
-            processes = max(1, cpu_count() - 1)
+    # --mp active les deux
+    use_mp = args.mp
+    use_mp_fast = args.mpfast or use_mp
+    use_mp_full = args.mpfull or use_mp
+
+    processes = args.proc if args.proc and args.proc > 0 else max(1, cpu_count() - 1)
 
     hashes_by_size_p1 = {}
     hashes_by_size_p2 = {}
@@ -312,15 +449,17 @@ def main():
     hashes_full_p1 = {}
     hashes_full_p2 = {}
 
+    # Phase taille
     hashes_by_size_p1, nfiles1 = create_hashes_by_size(keep_path, recursive=rpk)
     print(nfiles1, "files scanned in directory:", keep_path)
 
     hashes_by_size_p2, nfiles2 = create_hashes_by_size(delete_path, recursive=rpd)
     print(nfiles2, "files scanned in directory:", delete_path)
 
-    # reduce to common sizes
+    # Réduction à l'intersection des tailles
     hashes_by_size_p1, hashes_by_size_p2 = popItems(hashes_by_size_p1, hashes_by_size_p2)
 
+    # Fast hash
     print("Left Fast Hash")
     if use_mp_fast:
         hashes_on_1k_p1 = create_hashes_by_fasthash_mp(
@@ -337,12 +476,12 @@ def main():
     else:
         hashes_on_1k_p2 = create_hashes_by_fasthash(hashes_by_size_p2)
 
-    # reduce to common fast hashes
     hashes_on_1k_p1, hashes_on_1k_p2 = popItems(hashes_on_1k_p1, hashes_on_1k_p2)
 
     nbr = countItems(hashes_on_1k_p2)
     print("\n", nbr, "duplicated candidates after Fast Hash phase")
 
+    # Full hash
     print("Left Full Hash")
     if use_mp_full:
         hashes_full_p1 = create_hashes_by_fullhash_mp(
@@ -359,40 +498,84 @@ def main():
     else:
         hashes_full_p2 = create_hashes_by_fullhash(hashes_on_1k_p2)
 
-    # reduce to common full hashes
     hashes_full_p1, hashes_full_p2 = popItems(hashes_full_p1, hashes_full_p2)
 
-    # optional samePath filtering
-    if same_path:
-        hashes_full_p2_same = {}
+    # Filtrage final selon samePath / sameName
+    if same_path or same_name:
+        hashes_full_p2_filtered = {}
+
         for hsh, files2 in hashes_full_p2.items():
             files1 = hashes_full_p1.get(hsh, [])
             if not files1:
                 continue
 
-            rel1 = {norm_relpath(keep_path, f1) for f1 in files1}
+            dirs1 = set()
+            names1 = set()
 
-            filtered_files2 = [
-                f2 for f2 in files2
-                if norm_relpath(delete_path, f2) in rel1
-            ]
+            if same_path:
+                dirs1 = {
+                    os.path.dirname(norm_relpath(keep_path, f1))
+                    for f1 in files1
+                }
+
+            if same_name:
+                names1 = {basename(f1) for f1 in files1}
+
+            filtered_files2 = []
+            for f2 in files2:
+                rel2 = norm_relpath(delete_path, f2)
+                dir2 = os.path.dirname(rel2)
+                name2 = basename(f2)
+
+                ok = True
+                if same_path and dir2 not in dirs1:
+                    ok = False
+                if same_name and name2 not in names1:
+                    ok = False
+
+                if ok:
+                    filtered_files2.append(f2)
+
             if filtered_files2:
-                hashes_full_p2_same[hsh] = filtered_files2
+                hashes_full_p2_filtered[hsh] = filtered_files2
 
-        hashes_full_p2 = hashes_full_p2_same
+        hashes_full_p2 = hashes_full_p2_filtered
 
     nbr = countItems(hashes_full_p2)
     print("\n", nbr, "duplicates found (" + getKbMbGb(get_size_of_duplicates(hashes_full_p2)) + ")")
 
-    if "--print" in options:
+    if args.do_print:
         list_of_duplicates(hashes_full_p2, hashes_full_p1)
-    if "--delete" in options:
-        print("DELETING FILES")
-        delete_list_of_duplicates(hashes_full_p2)
-    if "--empty" in options:
-        print("REMOVING EMPTY DIRECTORIES")
-        empty = remove_empty_dirs(delete_path)
-        empty += remove_empty_dir(delete_path)
+
+    # Suppression des fichiers (trash ou rm)
+    if args.do_delete or args.do_rm:
+        if args.do_delete and args.do_rm:
+            print("WARNING: both --delete and --rm specified, using --rm (permanent delete)")
+
+        if dry_run:
+            if args.do_rm:
+                print("DELETING FILES PERMANENTLY (dry-run, nothing will be removed)")
+            else:
+                print("DELETING FILES (to trash, dry-run, nothing will be removed)")
+        else:
+            if args.do_rm:
+                print("DELETING FILES PERMANENTLY (no trash)")
+            else:
+                print("DELETING FILES (to trash)")
+
+        if args.do_rm:
+            delete_list_of_duplicates_rm(hashes_full_p2, dry_run=dry_run)
+        else:
+            delete_list_of_duplicates_trash(hashes_full_p2, dry_run=dry_run)
+
+    # Suppression des répertoires vides
+    if args.do_empty:
+        if dry_run:
+            print("REMOVING EMPTY DIRECTORIES (dry-run, nothing will be removed)")
+        else:
+            print("REMOVING EMPTY DIRECTORIES (to trash)")
+        empty = remove_empty_dirs(delete_path, dry_run=dry_run)
+        empty += remove_empty_dir(delete_path, dry_run=dry_run)
         if empty > 1:
             print(empty, "directories removed")
         else:

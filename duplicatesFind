@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
 import sys
 import os
 import hashlib
+import argparse
 from datetime import datetime
 from collections import defaultdict
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 from send2trash import send2trash
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
 
 
 def getKbMbGb(val):
@@ -69,16 +77,12 @@ def worker_full_hash(file):
     return file_hash, file
 
 
-def create_duplicates_by_fast_hash_mp(df, df2, processes=None, chunksize=16):
+def create_duplicates_by_fast_hash_mp(df, df2, processes, chunksize=16):
     """Fast hash parallèle (1 kio)."""
-    # Aplatir les listes de fichiers
     all_files = [f for files in df2.values() for f in files if len(files) > 1]
     n_files = len(all_files)
     if n_files == 0:
         return
-
-    if processes is None:
-        processes = max(1, cpu_count() - 1)
 
     print(f"Fast Hash (multiprocessing) on {n_files} files using {processes} processes")
 
@@ -95,15 +99,12 @@ def create_duplicates_by_fast_hash_mp(df, df2, processes=None, chunksize=16):
             df.setdefault(h, []).append(file)
 
 
-def create_duplicates_by_hash_mp(df, df2, processes=None, chunksize=8):
+def create_duplicates_by_hash_mp(df, df2, processes, chunksize=8):
     """Full hash parallèle (hash complet)."""
     all_files = [f for files in df2.values() for f in files if len(files) > 1]
     n_files = len(all_files)
     if n_files == 0:
         return
-
-    if processes is None:
-        processes = max(1, cpu_count() - 1)
 
     print(f"Full Hash (multiprocessing) on {n_files} files using {processes} processes")
 
@@ -120,11 +121,11 @@ def create_duplicates_by_hash_mp(df, df2, processes=None, chunksize=8):
             df.setdefault(h, []).append(file)
 
 
-# ---------- Version séquentielle d’origine du full hash ----------
+# ---------- Version séquentielle du full hash ----------
 
 def create_duplicates_by_hash(df, df2):
-    """Full hash séquentiel (version d’origine)."""
-    for size, files in tqdm(df2.items(), desc='Loading', ncols=110, colour='#7f0000'):
+    """Full hash séquentiel."""
+    for size, files in tqdm(df2.items(), desc='Full hash', ncols=110, colour='#7f0000'):
         if len(files) > 1:
             for file in files:
                 try:
@@ -189,41 +190,69 @@ def removeSingle(fd):
     return dd
 
 
-# --------------------------------------------------------
-# Start of the main program
-# --------------------------------------------------------
+# ---------- argparse + main ----------
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="duplicatesFind",
+        description="Scan a directory tree and find duplicate files, optionally delete them."
+    )
+
+    parser.add_argument(
+        "path",
+        help="Directory to scan for duplicates"
+    )
+
+    parser.add_argument(
+        "--print", dest="do_print", action="store_true",
+        help="Display the list of duplicate files"
+    )
+    parser.add_argument(
+        "--keepnew", dest="keep_new", action="store_true",
+        help="Delete all but the most recent duplicate files"
+    )
+    parser.add_argument(
+        "--keepold", dest="keep_old", action="store_true",
+        help="Delete all but the oldest duplicate files"
+    )
+
+    parser.add_argument(
+        "--mp", dest="mp", action="store_true",
+        help="Parallelize fast & full hash"
+    )
+    parser.add_argument(
+        "--mpfast", dest="mpfast", action="store_true",
+        help="Parallelize fast hash"
+    )
+    parser.add_argument(
+        "--mpfull", dest="mpfull", action="store_true",
+        help="Parallelize full hash (recommended)"
+    )
+    parser.add_argument(
+        "--proc", type=int, metavar="N",
+        help="Number of processes to use (default: ncore-1)"
+    )
+
+    return parser
+
 
 def main():
-    print("duplicatesFind (multiprocessing full hash)")
+    print("duplicatesFind")
     print("(c) by Olivier Pantalé 2022-2026\n")
 
-    if len(sys.argv) <= 1:
-        print("Usage is the following:")
-        print("    duplicateFind path [options]")
-        print("Options:")
-        print("    --print      displays the list of files")
-        print("    --keepnew    deletes all but the most recent duplicate files")
-        print("    --keepold    deletes all but the oldest duplicate files")
-        print("    --mp         parallelize fast & full hash")
-        print("    --mpfast     parallelize fast hash")
-        print("    --mpfull     parallelize full hash (recommended)")
-        print("    --proc N     use N processes")
-        return
-
-    folder = sys.argv[1]
-    options = sys.argv[2:]
+    parser = build_parser()
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
+    args = parser.parse_args()
+    
+    folder = os.path.realpath(args.path)
 
     # --mp active à la fois fast et full
-    use_mp = "--mp" in options
-    use_mp_fast = ("--mpfast" in options) or use_mp
-    use_mp_full = ("--mpfull" in options) or use_mp
-    processes = None
-    if "--proc" in options:
-        idx = options.index("--proc")
-        try:
-            processes = int(options[idx + 1])
-        except (IndexError, ValueError):
-            processes = None
+    use_mp = args.mp
+    use_mp_fast = args.mpfast or use_mp
+    use_mp_full = args.mpfull or use_mp
+
+    processes = args.proc if args.proc and args.proc > 0 else max(1, cpu_count() - 1)
 
     print("Scanning subdirectories for duplicate files")
 
@@ -257,13 +286,13 @@ def main():
         'real duplicate files found (' + getKbMbGb(savedSize) + ')'
     )
 
-    if '--print' in options:
+    if args.do_print:
         list_of_duplicates(duplicates)
-    if '--keepnew' in options:
+    if args.keep_new:
         print("DELETING all but the most recent duplicate files")
         keep_recent_file(duplicates)
         print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
-    if '--keepold' in options:
+    if args.keep_old:
         print("DELETING all but the oldest duplicate files")
         keep_old_file(duplicates)
         print('deleted (' + getKbMbGb(savedSize) + ') of duplicate files')
