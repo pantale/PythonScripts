@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
+import argparse
+import os
+import re
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
+
+
+LOG = Path("/var/log/apt/history.log")
+PKG_KEYS = ["Install", "Upgrade", "Remove", "Purge", "Reinstall", "Downgrade"]
+
+
+def parse_pkg_list(raw: str, key: str) -> List[Dict[str, str]]:
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    entries: List[Dict[str, str]] = []
+    pattern = re.compile(r"([^,\s:]+):([^\s]+)\s+\(([^)]*)\)")
+    matches = pattern.findall(raw)
+
+    for name, arch, rest in matches:
+        rest = rest.strip()
+
+        if key == "Upgrade":
+            parts = [x.strip() for x in rest.split(",", 1)]
+            old_version = parts[0] if len(parts) > 0 else ""
+            new_version = parts[1] if len(parts) > 1 else ""
+            entries.append(
+                {
+                    "name": name,
+                    "arch": arch,
+                    "old_version": old_version,
+                    "new_version": new_version,
+                }
+            )
+        else:
+            parts = [x.strip() for x in rest.split(",", 1)]
+            version = parts[0] if len(parts) > 0 else ""
+            extra = parts[1] if len(parts) > 1 else ""
+            entries.append(
+                {
+                    "name": name,
+                    "arch": arch,
+                    "version": version,
+                    "extra": extra,
+                }
+            )
+
+    return entries
+
+
+def parse_history_blocks(path: Path) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+
+            if not line.strip():
+                continue
+
+            if line.startswith("Start-Date:"):
+                if current is not None:
+                    blocks.append(current)
+
+                current = {
+                    "start_date": line.split("Start-Date:", 1)[1].strip(),
+                    "end_date": "",
+                    "commandline": "",
+                    "requested_by": "",
+                    "install": [],
+                    "upgrade": [],
+                    "remove": [],
+                    "purge": [],
+                    "reinstall": [],
+                    "downgrade": [],
+                }
+                continue
+
+            if current is None:
+                continue
+
+            if line.startswith("End-Date:"):
+                current["end_date"] = line.split("End-Date:", 1)[1].strip()
+                continue
+
+            if line.startswith("Commandline:"):
+                current["commandline"] = line.split("Commandline:", 1)[1].strip()
+                continue
+
+            if line.startswith("Requested-By:"):
+                current["requested_by"] = line.split("Requested-By:", 1)[1].strip()
+                continue
+
+            for key in PKG_KEYS:
+                prefix = f"{key}:"
+                if line.startswith(prefix):
+                    raw = line.split(prefix, 1)[1]
+                    current[key.lower()].extend(parse_pkg_list(raw, key))
+                    break
+
+    if current is not None:
+        blocks.append(current)
+
+    return blocks
+
+
+def block_contains_package(block: Dict[str, Any], package_filter: str) -> bool:
+    target = package_filter.lower()
+
+    for section in ["install", "upgrade", "remove", "purge", "reinstall", "downgrade"]:
+        for pkg in block.get(section, []):
+            if target in pkg.get("name", "").lower():
+                return True
+    return False
+
+
+def filter_blocks(
+    blocks: List[Dict[str, Any]],
+    date_prefix: Optional[str] = None,
+    package_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    filtered = blocks
+
+    if date_prefix:
+        filtered = [
+            b for b in filtered
+            if b.get("start_date", "").startswith(date_prefix)
+        ]
+
+    if package_filter:
+        filtered = [
+            b for b in filtered
+            if block_contains_package(b, package_filter)
+        ]
+
+    return filtered
+
+
+def summarize_block(block: Dict[str, Any]) -> str:
+    lines: List[str] = []
+
+    lines.append("=== APT Session ===")
+    lines.append(f"Start       : {block.get('start_date', '')}")
+    lines.append(f"End         : {block.get('end_date', '')}")
+    lines.append(f"Command     : {block.get('commandline', '')}")
+    lines.append(f"Requested by: {block.get('requested_by', '')}")
+
+    def add_section(title: str, key: str) -> None:
+        pkgs = block.get(key, [])
+        if not pkgs:
+            return
+
+        lines.append("")
+        lines.append(f"{title} ({len(pkgs)} package(s)):")
+
+        for pkg in pkgs:
+            if key == "upgrade":
+                lines.append(
+                    f"  - {pkg['name']}:{pkg['arch']} "
+                    f"({pkg['old_version']} -> {pkg['new_version']})"
+                )
+            else:
+                extra = f", {pkg['extra']}" if pkg.get("extra") else ""
+                lines.append(
+                    f"  - {pkg['name']}:{pkg['arch']} ({pkg['version']}{extra})"
+                )
+
+    add_section("Installed", "install")
+    add_section("Upgraded", "upgrade")
+    add_section("Removed", "remove")
+    add_section("Purged", "purge")
+    add_section("Reinstalled", "reinstall")
+    add_section("Downgraded", "downgrade")
+
+    return "\n".join(lines)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Summarize APT operations from /var/log/apt/history.log"
+    )
+    parser.add_argument(
+        "--date",
+        help="Filter by date or date prefix, for example 2026-03-24 or 2026-03",
+        default=None,
+    )
+    parser.add_argument(
+        "--package",
+        help="Filter by package name (partial match)",
+        default=None,
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Show only the last N sessions after filtering",
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Show sessions from newest to oldest",
+    )
+    parser.add_argument(
+        "--log",
+        type=Path,
+        default=LOG,
+        help=f"Path to the APT history log (default: {LOG})",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
+
+    args = parser.parse_args()
+
+    log_path = args.log
+
+    if not log_path.exists():
+        print(f"File not found: {log_path}")
+        return
+
+    if not os.access(log_path, os.R_OK):
+        print(f"Read access denied: {log_path}")
+        print("Try running with sudo.")
+        return
+
+    blocks = parse_history_blocks(log_path)
+    blocks = filter_blocks(
+        blocks,
+        date_prefix=args.date,
+        package_filter=args.package,
+    )
+
+    blocks.sort(key=lambda b: b.get("start_date", ""))
+
+    if args.reverse:
+        blocks.reverse()
+
+    if args.limit is not None:
+        blocks = blocks[:args.limit] if args.reverse else blocks[-args.limit:]
+
+    if not blocks:
+        print("No matching APT session found.")
+        return
+
+    for i, block in enumerate(blocks):
+        if i > 0:
+            print("\n" + "=" * 72 + "\n")
+        print(summarize_block(block))
+
+
+if __name__ == "__main__":
+    main()
