@@ -14,7 +14,7 @@ from send2trash import send2trash
 try:
     import argcomplete
 except ImportError:
-    argcomplete = None
+    argcomplete = None  # argcomplete est optionnel
 
 
 def getKbMbGb(val):
