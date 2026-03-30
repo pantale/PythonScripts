@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
+"""
+WinApps Docker state manager with desktop notifications.
+
+Features
+--------
+- No option: toggle the WinApps Docker Compose stack state.
+- --status: print the current state.
+- --start: force the stack to start.
+- --stop: force the stack to stop.
+- --pause: force the stack to pause.
+
+Requirements
+------------
+- Docker with Compose support available as: docker compose
+- WinApps Compose files located in: ~/.config/winapps
+- Optional desktop notifications via: notify-send
+- Optional shell completion via: python-argcomplete
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
+
+COMPOSE_DIR = Path.home() / ".config" / "winapps"
+COMPOSE_CMD = ["docker", "compose"]
+
+# Optional: set a specific service name if you want to check only one service.
+# Example: SERVICE_NAME = "winapps"
+SERVICE_NAME = None
+
+
+def docker_compose(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run a docker compose command inside the WinApps configuration directory."""
+    return subprocess.run(
+        COMPOSE_CMD + list(args),
+        cwd=str(COMPOSE_DIR),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+
+def notify(summary: str, body: str = "", icon: str = "dialog-information") -> None:
+    """Send a desktop notification using notify-send, if available."""
+    try:
+        cmd = ["notify-send", "-i", icon, summary]
+        if body:
+            cmd.append(body)
+        subprocess.run(cmd, check=False)
+    except FileNotFoundError:
+        pass
+
+
+def has_status(status: str) -> bool:
+    """
+    Return True if at least one container matches the requested status.
+
+    If SERVICE_NAME is set, only that service is checked.
+    """
+    proc = docker_compose("ps", "--status", status)
+
+    if proc.returncode != 0:
+        return False
+
+    lines = proc.stdout.splitlines()
+
+    if len(lines) <= 1:
+        return False
+
+    if SERVICE_NAME:
+        return any(SERVICE_NAME in line for line in lines[1:])
+
+    return any(line.strip() for line in lines[1:])
+
+
+def get_state() -> str:
+    """Return the current state as 'started', 'paused' or 'stopped'."""
+    if has_status("paused"):
+        return "paused"
+
+    if has_status("running"):
+        return "started"
+
+    return "stopped"
+
+
+def print_status() -> None:
+    """Print the current WinApps Docker status."""
+    print(f"Current winapps docker status is: {get_state()}")
+
+
+def print_transition(old_state: str, new_state: str) -> None:
+    """Print a state transition."""
+    print(f"WinApps docker state changed: {old_state} -> {new_state}")
+
+
+def start_stack() -> bool:
+    """Start the WinApps Compose stack."""
+    proc = docker_compose("up", "-d")
+    return proc.returncode == 0
+
+
+def stop_stack() -> bool:
+    """Stop the WinApps Compose stack."""
+    proc = docker_compose("down")
+    return proc.returncode == 0
+
+
+def pause_stack() -> bool:
+    """Pause the WinApps Compose stack."""
+    proc = docker_compose("pause")
+    return proc.returncode == 0
+
+
+def unpause_stack() -> bool:
+    """Unpause the WinApps Compose stack."""
+    proc = docker_compose("unpause")
+    return proc.returncode == 0
+
+
+def ensure_started() -> int:
+    """Force the stack into the started state."""
+    old_state = get_state()
+
+    if old_state == "started":
+        print_transition(old_state, old_state)
+        notify("WinApps", "Container already started.", "dialog-information")
+        return 0
+
+    if old_state == "paused":
+        success = unpause_stack()
+    else:
+        success = start_stack()
+
+    if success:
+        new_state = get_state()
+        print_transition(old_state, new_state)
+        notify("WinApps", f"Container started from state: {old_state}.", "dialog-ok")
+        return 0
+
+    notify("WinApps", "Error while starting the container.", "dialog-error")
+    return 1
+
+
+def ensure_stopped() -> int:
+    """Force the stack into the stopped state."""
+    old_state = get_state()
+
+    if old_state == "stopped":
+        print_transition(old_state, old_state)
+        notify("WinApps", "Container already stopped.", "dialog-information")
+        return 0
+
+    if stop_stack():
+        new_state = get_state()
+        print_transition(old_state, new_state)
+        notify("WinApps", f"Container stopped from state: {old_state}.", "dialog-ok")
+        return 0
+
+    notify("WinApps", "Error while stopping the container.", "dialog-error")
+    return 1
+
+
+def ensure_paused() -> int:
+    """Force the stack into the paused state."""
+    old_state = get_state()
+
+    if old_state == "paused":
+        print_transition(old_state, old_state)
+        notify("WinApps", "Container already paused.", "dialog-information")
+        return 0
+
+    if old_state == "stopped":
+        notify("WinApps", "Cannot pause a stopped container.", "dialog-error")
+        return 1
+
+    if pause_stack():
+        new_state = get_state()
+        print_transition(old_state, new_state)
+        notify("WinApps", f"Container paused from state: {old_state}.", "dialog-ok")
+        return 0
+
+    notify("WinApps", "Error while pausing the container.", "dialog-error")
+    return 1
+
+
+def toggle_stack() -> int:
+    """
+    Toggle the stack state and print the old and new states.
+
+    Behavior:
+    - started -> paused
+    - paused -> stopped
+    - stopped -> started
+    """
+    old_state = get_state()
+
+    if old_state in ("started", "paused"):
+        if stop_stack():
+            new_state = get_state()
+            print_transition(old_state, new_state)
+            notify("WinApps", "Container stopped.", "dialog-ok")
+            return 0
+
+        notify("WinApps", "Error while stopping the container.", "dialog-error")
+        return 1
+
+    if start_stack():
+        new_state = get_state()
+        print_transition(old_state, new_state)
+        notify("WinApps", "Container started.", "dialog-ok")
+        return 0
+
+    notify("WinApps", "Error while starting the container.", "dialog-error")
+    return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create and configure the command-line parser."""
+    parser = argparse.ArgumentParser(
+        description="Manage the WinApps Docker Compose stack."
+    )
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the current Docker status without changing it.",
+    )
+    group.add_argument(
+        "--start",
+        action="store_true",
+        help="Force the WinApps Docker stack to start.",
+    )
+    group.add_argument(
+        "--stop",
+        action="store_true",
+        help="Force the WinApps Docker stack to stop.",
+    )
+    group.add_argument(
+        "--pause",
+        action="store_true",
+        help="Force the WinApps Docker stack to pause.",
+    )
+
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments and enable argcomplete when available."""
+    parser = build_parser()
+
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Program entry point."""
+    args = parse_args()
+
+    if args.status:
+        print_status()
+        return 0
+
+    if args.start:
+        return ensure_started()
+
+    if args.stop:
+        return ensure_stopped()
+
+    if args.pause:
+        return ensure_paused()
+
+    return toggle_stack()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
