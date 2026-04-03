@@ -1,69 +1,200 @@
 #!/usr/bin/env python3
-import argparse
-import glob
-import os
-import re
-import shutil
+# PYTHON_ARGCOMPLETE_OK
+# replaceInFile - Replace a string in text files
+# (c) by Olivier Pantalé 2024-2026
+#
+# Usage: replaceInFile [options] <file_pattern> <search_string> <replace_string>
+#
+# Changelog v5:
+#   - Added argcomplete support for argument completion in bash/zsh
+#   - Backup file is only created if the file content is actually modified
+#   - Added --dry-run option to report changes without modifying files
+#   - Added robust decoding fallback and skip reporting for unreadable files
 
-def replace_in_file(file_path, search_string, replace_string, pattern_search, backup, display):
-    if display:
-        print(f"Processing file: {file_path}")
-    
-    with open(file_path, 'r') as file:
-        content = file.read()
-    
-    if pattern_search:
-        search_pattern = search_string.replace('\\*', '.*').replace('\\?', '.')
-        new_content = re.sub(search_pattern, replace_string, content)
+import os
+import sys
+import glob
+import shutil
+import argparse
+import re
+
+try:
+    import argcomplete
+    HAS_ARGCOMPLETE = True
+except ImportError:
+    HAS_ARGCOMPLETE = False
+
+
+def read_text_file(file_path):
+    """Read a text file using several common encodings."""
+    encodings = ('utf-8', 'latin-1', 'cp1252')
+    last_error = None
+
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                return f.read(), encoding
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+
+    raise last_error
+
+
+def replace_string_in_files(file_pattern, search_string, replace_string,
+                            backup=False, subdir=False, pattern=False,
+                            display=False, dry_run=False):
+    """
+    Replace occurrences of search_string by replace_string in all files
+    matching file_pattern.
+    """
+    if subdir:
+        files = [
+            os.path.join(root, f)
+            for root, _, filenames in os.walk('.')
+            for f in filenames
+            if glob.fnmatch.fnmatch(f, file_pattern)
+        ]
     else:
-        new_content = content.replace(search_string, replace_string)
-    
-    if backup:
-        backup_path = f"{os.path.splitext(file_path)[0]}-backup{os.path.splitext(file_path)[1]}"
-        shutil.copy2(file_path, backup_path)
-    
-    with open(file_path, 'w') as file:
-        file.write(new_content)
+        files = glob.glob(file_pattern)
+
+    modified_count = 0
+    unchanged_count = 0
+    skipped_count = 0
+
+    for file in files:
+        if not os.path.isfile(file):
+            continue
+
+        try:
+            content, encoding = read_text_file(file)
+        except (UnicodeDecodeError, OSError) as exc:
+            skipped_count += 1
+            if display:
+                print(f"Skipped file: {file} ({exc})")
+            continue
+
+        if pattern:
+            escaped = re.escape(search_string).replace(r'\*', '.*').replace(r'\?', '.')
+            new_content = re.sub(escaped, replace_string, content)
+        else:
+            decoded_search = search_string.encode().decode('unicode_escape')
+            decoded_replace = replace_string.encode().decode('unicode_escape')
+            new_content = content.replace(decoded_search, decoded_replace)
+
+        if new_content != content:
+            modified_count += 1
+
+            if dry_run:
+                if display:
+                    print(f"Would modify file: {file}")
+                continue
+
+            if backup:
+                base, ext = os.path.splitext(file)
+                backup_file = f"{base}-backup{ext}"
+                shutil.copy2(file, backup_file)
+
+            with open(file, 'w', encoding=encoding) as f:
+                f.write(new_content)
+
+            if display:
+                print(f"Modified file: {file}")
+        else:
+            unchanged_count += 1
+            if display:
+                print(f"Unchanged file: {file}")
+
+    if dry_run:
+        print(f"Total files that would be modified: {modified_count}")
+    else:
+        print(f"Total files modified: {modified_count}")
+
+    if display:
+        print(f"Total files unchanged: {unchanged_count}")
+        print(f"Total files skipped: {skipped_count}")
+
+
+def display_usage():
+    """Print a detailed usage message."""
+    print("Usage: replaceInFile [options] <file_pattern> <search_string> <replace_string>")
+    print()
+    print("Description: Replace a string in text files.")
+    print()
+    print("Arguments:")
+    print("  file_pattern   File pattern to match (e.g. *.txt)")
+    print("  search_string  String to search for")
+    print("  replace_string String to replace with")
+    print()
+    print("Options:")
+    print("  -b, --backup   Create a backup of each MODIFIED file")
+    print("  -s, --subdir   Process files in subdirectories")
+    print("  -p, --pattern  Use wildcard pattern matching for search string")
+    print("  -d, --display  Display the name of each processed file")
+    print("      --dry-run  Show what would be modified without writing files")
+    print()
+    print("Pattern search explanation:")
+    print("  Use '*'  as a wildcard to match any number of characters.")
+    print("  Use '?'  as a wildcard to match exactly one character.")
+    print("  Use '\\*' to match a literal '*' character.")
+    print("  Use '\\?' to match a literal '?' character.")
+    print("  Example: 'xyz*xzy'  matches 'xyz' followed by any characters, then 'xzy'.")
+    print("  Example: 'xyz?xzy'  matches 'xyz' followed by exactly one character, then 'xzy'.")
+    print()
+    if not HAS_ARGCOMPLETE:
+        print("Note: install 'argcomplete' for shell argument completion:")
+        print("  pip install argcomplete")
+        print("  activate-global-python-argcomplete  (once, for bash)")
+
 
 def main():
-    print ("replaceInFile")
-    print ("(c) by Olivier Pantalé 2024-2026")
-    print ("")
-    parser = argparse.ArgumentParser(description="Replace strings in text files.")
-    parser.add_argument("file_pattern", nargs='?', help="File name or wildcard pattern")
-    parser.add_argument("search_string", nargs='?', help="String to search for")
-    parser.add_argument("replace_string", nargs='?', help="String to replace with")
-    parser.add_argument("-b", "--backup", action="store_true", help="Create backup of original files")
-    parser.add_argument("-s", "--subdir", action="store_true", help="Process files in subdirectories") 
-    parser.add_argument("-p", "--pattern", action="store_true", help="Enable pattern search")
-    parser.add_argument("-d", "--display", action="store_true", help="Display processed file names")
+    print("replaceInFile")
+    print("(c) by Olivier Pantalé 2024-2026")
+    print()
+
+    parser = argparse.ArgumentParser(
+        description='Replace a string in text files.',
+        usage=argparse.SUPPRESS
+    )
+    parser.add_argument('file_pattern', nargs='?', help='File pattern to match (e.g. *.txt)')
+    parser.add_argument('search_string', nargs='?', help='String to search for')
+    parser.add_argument('replace_string', nargs='?', help='String to replace with')
+    parser.add_argument('-b', '--backup', action='store_true',
+                        help='Create a backup of each modified file')
+    parser.add_argument('-s', '--subdir', action='store_true',
+                        help='Process files in subdirectories')
+    parser.add_argument('-p', '--pattern', action='store_true',
+                        help='Use wildcard pattern matching for search string')
+    parser.add_argument('-d', '--display', action='store_true',
+                        help='Display the name of each processed file')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Show what would be modified without writing files')
+
+    if HAS_ARGCOMPLETE:
+        argcomplete.autocomplete(parser)
+
+    if len(sys.argv) == 1:
+        display_usage()
+        sys.exit(0)
 
     args = parser.parse_args()
 
     if any(arg is None for arg in (args.file_pattern, args.search_string, args.replace_string)):
-        parser.print_help()
-        print("\nPattern search explanation:")
-        print("When -p or --pattern is used, wildcard characters in the search string are supported:")
-        print("'\\n' matches a new line") 
-        print("'\\t' matches a tabluation") 
-        print("'\\*' matches any number of characters") 
-        print("'\\?' matches exactly one character")
-        print("For example, 'before\\*after' would match 'before' followed by any characters, then 'after'")
-        print("'before\\?after' would match 'before' followed by exactly one character, then 'after'")
-        return
+        print("Error: Missing required arguments.")
+        display_usage()
+        sys.exit(1)
 
-    if args.subdir:
-        files = glob.glob(args.file_pattern, recursive=True)
-    else:
-        files = glob.glob(args.file_pattern)
+    replace_string_in_files(
+        args.file_pattern,
+        args.search_string,
+        args.replace_string,
+        backup=args.backup,
+        subdir=args.subdir,
+        pattern=args.pattern,
+        display=args.display,
+        dry_run=args.dry_run
+    )
 
-    file_count = 0
-    for file_path in files:
-        if os.path.isfile(file_path):
-            replace_in_file(file_path, args.search_string, args.replace_string, args.pattern, args.backup, args.display)
-            file_count += 1
 
-    print(f"Number of files treated: {file_count}")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
