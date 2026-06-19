@@ -18,8 +18,10 @@ except ImportError:  # pragma: no cover
 
 
 PROGRAM_NAME = "bibiscoConvert"
-PROGRAM_VERSION = "1.1-0"
+PROGRAM_VERSION = "1.2-1"
 PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
+
+NBSP = "\u00A0"
 
 FORMAT_ALIASES = {
     "json": "json",
@@ -28,6 +30,8 @@ FORMAT_ALIASES = {
     "latex": "latex",
     "tex": "latex",
 }
+
+FORMAT_CHOICES = ["json", "markdown", "md", "latex", "tex"]
 
 
 def normalize_output_format(value: str) -> str:
@@ -39,25 +43,22 @@ def normalize_output_format(value: str) -> str:
     return FORMAT_ALIASES[value]
 
 
+def format_completer(prefix, parsed_args, **kwargs):
+    return [item for item in FORMAT_CHOICES if item.startswith(prefix)]
+
+
 def apply_french_substitutions(text: str) -> str:
     if not text:
         return text
 
-    # Effectuer les modifications existantes
-    text = text.replace("---", "—")  # Remplacer les tirets cadratins longs
-    text = text.replace("--", "–")  # Remplacer les tirets demi-cadratins
-    text = re.sub(r'"([^"]*)"', r'« \1 »', text) # Remplacer les guillemets droits par des guillemets français
-    text = text.replace("...", '…') # Remplacer les points de suspension
-    text = text.replace(" :", ' :') # Remplacer ' :''
-    text = text.replace(" ;", ' ;') # Remplacer ' ;''
-    text = text.replace(" !", ' !') # Remplacer ' :''
-    text = text.replace(" ?", ' ?') # Remplacer ' :''
+    text = text.replace("---", "—")
+    text = text.replace("--", "–")
+    text = re.sub(r'"([^"]*)"', rf"«{NBSP}\1{NBSP}»", text)
+    text = text.replace("...", "…")
 
-    # Ajouter la nouvelle fonctionnalité pour les formats d'heure
-    # Transformer "16h27" en "16 h 27" avec espaces insécables
-    text = re.sub(r'(\d{1,2})h(\d{2})', r'\1 h \2', text)
-    # Transformer "16 h 27" sans espaces insécables en écriture avec espaces insécables
-    text = re.sub(r'(\d{1,2}) h (\d{2})', r'\1 h \2', text)
+    text = re.sub(r"\s*([:;!?])", rf"{NBSP}\1", text)
+    text = re.sub(r"(\d{1,2})h(\d{2})", rf"\1{NBSP}h{NBSP}\2", text)
+    text = re.sub(r"(\d{1,2}) h (\d{2})", rf"\1{NBSP}h{NBSP}\2", text)
 
     return text
 
@@ -88,6 +89,81 @@ def latex_escape(text: str) -> str:
     return "".join(replacements.get(ch, ch) for ch in text)
 
 
+def split_paragraph_into_sentences(text: str) -> List[str]:
+    text = re.sub(r"[ \t\r\f\v]+", " ", text.strip(" \t\r\f\v\n"))
+    if not text:
+        return []
+
+    sentences: List[str] = []
+    current: List[str] = []
+
+    inside_french_quotes = False
+    inside_straight_quotes = False
+
+    i = 0
+    n = len(text)
+
+    while i < n:
+        ch = text[i]
+        current.append(ch)
+
+        if ch == "«":
+            inside_french_quotes = True
+
+        elif ch == "»":
+            inside_french_quotes = False
+
+        elif ch == '"':
+            inside_straight_quotes = not inside_straight_quotes
+
+        elif ch in ".!?…" and not inside_french_quotes and not inside_straight_quotes:
+            j = i + 1
+            while j < n and text[j] in ".!?…":
+                current.append(text[j])
+                j += 1
+
+            sentence = "".join(current).strip(" \t\r\f\v\n")
+            if sentence:
+                sentences.append(sentence)
+
+            current = []
+
+            while j < n and text[j] in " \t\r\f\v\n":
+                j += 1
+
+            i = j
+            continue
+
+        i += 1
+
+    tail = "".join(current).strip(" \t\r\f\v\n")
+    if tail:
+        sentences.append(tail)
+
+    return sentences
+
+
+def render_split_lines(text: str, output_format: str, split_lines: bool = False) -> str:
+    if not split_lines or not text:
+        return text
+
+    paragraphs = text.split("\n")
+    rendered_paragraphs: List[str] = []
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+
+        if not paragraph:
+            rendered_paragraphs.append("")
+            continue
+
+        sentences = split_paragraph_into_sentences(paragraph)
+
+        rendered_paragraphs.append("\n".join(sentences))
+
+    return "\n".join(rendered_paragraphs)
+
+
 class RichTextBlockExtractor(HTMLParser):
     def __init__(self, output_format: str = "json", subs: bool = False):
         super().__init__(convert_charrefs=False)
@@ -100,6 +176,7 @@ class RichTextBlockExtractor(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs):
         tag = tag.lower()
+
         if tag == "p":
             self.in_paragraph = True
             self.current_parts = []
@@ -195,11 +272,10 @@ class RichTextBlockExtractor(HTMLParser):
         return ""
 
     def _normalize(self, text: str) -> str:
-        text = text.replace("\xa0", " ")
         text = re.sub(r"[ \t\r\f\v]+", " ", text)
-        text = re.sub(r" *\n *", "\n", text)
+        text = re.sub(r"[ \t\r\f\v]*\n[ \t\r\f\v]*", "\n", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
-        text = text.strip()
+        text = text.strip(" \t\r\f\v\n")
         if self.subs:
             text = apply_french_substitutions(text)
         return text
@@ -217,10 +293,10 @@ def extract_blocks(html_fragment: str, output_format: str = "json", subs: bool =
         return parser.blocks
 
     text = unescape(re.sub(r"<[^>]+>", "", html_fragment)).strip()
-    if subs:
-        text = apply_french_substitutions(text)
     if output_format == "latex":
         text = latex_escape(text)
+    if subs:
+        text = apply_french_substitutions(text)
     return [text] if text else []
 
 
@@ -393,30 +469,48 @@ def build_location_export(
     }
 
 
-def scene_to_markdown(scene: Dict[str, Any], include_scene_header: bool = False) -> List[str]:
+def scene_to_markdown(
+    scene: Dict[str, Any],
+    include_scene_header: bool = False,
+    split_lines: bool = False,
+) -> List[str]:
     lines: List[str] = []
     if include_scene_header:
         lines.extend([f"## {scene['scene_title']}", ""])
     for block in scene.get("blocks", []):
-        lines.extend([block, ""])
+        lines.extend([render_split_lines(block, "markdown", split_lines), ""])
     return lines
 
 
-def to_markdown(data: List[Dict[str, Any]], include_scene_headers: bool = False) -> str:
+def to_markdown(
+    data: List[Dict[str, Any]],
+    include_scene_headers: bool = False,
+    split_lines: bool = False,
+) -> str:
     lines: List[str] = []
     for chapter in data:
         lines.extend([f"# {chapter['chapter_title']}", ""])
         for scene in chapter.get("scenes", []):
-            lines.extend(scene_to_markdown(scene, include_scene_header=include_scene_headers))
+            lines.extend(
+                scene_to_markdown(
+                    scene,
+                    include_scene_header=include_scene_headers,
+                    split_lines=split_lines,
+                )
+            )
     return "\n".join(lines).rstrip() + "\n"
 
 
-def scene_to_latex(scene: Dict[str, Any], include_scene_header: bool = False) -> List[str]:
+def scene_to_latex(
+    scene: Dict[str, Any],
+    include_scene_header: bool = False,
+    split_lines: bool = False,
+) -> List[str]:
     lines: List[str] = []
     if include_scene_header:
         lines.extend([rf"\subsection*{{{latex_escape(scene['scene_title'])}}}", ""])
     for block in scene.get("blocks", []):
-        lines.extend([block, "", ""])
+        lines.extend([render_split_lines(block, "latex", split_lines), ""])
     return lines
 
 
@@ -442,17 +536,24 @@ def to_latex(
     include_scene_headers: bool = False,
     full_document: bool = False,
     title: str = "Export Bibisco",
+    split_lines: bool = False,
 ) -> str:
     lines: List[str] = []
     for chapter in data:
         lines.extend([rf"\section*{{{latex_escape(chapter['chapter_title'])}}}", ""])
         for scene in chapter.get("scenes", []):
-            lines.extend(scene_to_latex(scene, include_scene_header=include_scene_headers))
+            lines.extend(
+                scene_to_latex(
+                    scene,
+                    include_scene_header=include_scene_headers,
+                    split_lines=split_lines,
+                )
+            )
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title=title) if full_document else body
 
 
-def characters_to_markdown(data: Dict[str, Any]) -> str:
+def characters_to_markdown(data: Dict[str, Any], split_lines: bool = False) -> str:
     lines: List[str] = ["# Personnages", ""]
 
     if data.get("main_count", 0):
@@ -462,15 +563,18 @@ def characters_to_markdown(data: Dict[str, Any]) -> str:
                 continue
             lines.extend([f"### {item['name']}", ""])
             if item.get("description"):
-                lines.extend([item["description"], ""])
+                lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
             if item.get("notes"):
-                lines.extend(["#### Notes", "", item["notes"], ""])
+                lines.extend(["#### Notes", "", render_split_lines(item["notes"], "markdown", split_lines), ""])
             if item.get("conflict"):
-                lines.extend(["#### Conflit", "", item["conflict"], ""])
+                lines.extend(["#### Conflit", "", render_split_lines(item["conflict"], "markdown", split_lines), ""])
             if item.get("evolution"):
-                lines.extend(["#### Évolution", "", item["evolution"], ""])
+                lines.extend(["#### Évolution", "", render_split_lines(item["evolution"], "markdown", split_lines), ""])
             if item.get("life_before_story"):
-                lines.extend(["#### Vie avant le récit", "", item["life_before_story"], ""])
+                lines.extend([
+                    "#### Vie avant le récit", "",
+                    render_split_lines(item["life_before_story"], "markdown", split_lines), ""
+                ])
 
     if data.get("secondary_count", 0):
         lines.extend(["## Personnages secondaires", ""])
@@ -479,12 +583,16 @@ def characters_to_markdown(data: Dict[str, Any]) -> str:
                 continue
             lines.extend([f"### {item['name']}", ""])
             if item.get("description"):
-                lines.extend([item["description"], ""])
+                lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def characters_to_latex(data: Dict[str, Any], full_document: bool = False) -> str:
+def characters_to_latex(
+    data: Dict[str, Any],
+    full_document: bool = False,
+    split_lines: bool = False,
+) -> str:
     lines: List[str] = [r"\section*{Personnages}", ""]
 
     if data.get("main_count", 0):
@@ -494,15 +602,19 @@ def characters_to_latex(data: Dict[str, Any], full_document: bool = False) -> st
                 continue
             lines.extend([rf"\subsubsection*{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
-                lines.extend([item["description"], "", ""])
+                lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
             if item.get("notes"):
-                lines.extend([r"\paragraph{Notes}", item["notes"], "", ""])
+                lines.extend([r"\paragraph{Notes}", render_split_lines(item["notes"], "latex", split_lines), ""])
             if item.get("conflict"):
-                lines.extend([r"\paragraph{Conflit}", item["conflict"], "", ""])
+                lines.extend([r"\paragraph{Conflit}", render_split_lines(item["conflict"], "latex", split_lines), ""])
             if item.get("evolution"):
-                lines.extend([r"\paragraph{Évolution}", item["evolution"], "", ""])
+                lines.extend([r"\paragraph{Évolution}", render_split_lines(item["evolution"], "latex", split_lines), ""])
             if item.get("life_before_story"):
-                lines.extend([r"\paragraph{Vie avant le récit}", item["life_before_story"], "", ""])
+                lines.extend([
+                    r"\paragraph{Vie avant le récit}",
+                    render_split_lines(item["life_before_story"], "latex", split_lines),
+                    ""
+                ])
 
     if data.get("secondary_count", 0):
         lines.extend([r"\subsection*{Personnages secondaires}", ""])
@@ -511,13 +623,13 @@ def characters_to_latex(data: Dict[str, Any], full_document: bool = False) -> st
                 continue
             lines.extend([rf"\subsubsection*{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
-                lines.extend([item["description"], "", ""])
+                lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
 
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title="Personnages") if full_document else body
 
 
-def locations_to_markdown(data: Dict[str, Any]) -> str:
+def locations_to_markdown(data: Dict[str, Any], split_lines: bool = False) -> str:
     lines: List[str] = ["# Lieux", ""]
     for item in data["locations"]:
         title = item.get("location") or "Lieu sans nom"
@@ -532,11 +644,15 @@ def locations_to_markdown(data: Dict[str, Any]) -> str:
         if meta:
             lines.extend(["; ".join(meta), ""])
         if item.get("description"):
-            lines.extend([item["description"], ""])
+            lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
-def locations_to_latex(data: Dict[str, Any], full_document: bool = False) -> str:
+def locations_to_latex(
+    data: Dict[str, Any],
+    full_document: bool = False,
+    split_lines: bool = False,
+) -> str:
     lines: List[str] = [r"\section*{Lieux}", ""]
     for item in data["locations"]:
         title = latex_escape(item.get("location") or "Lieu sans nom")
@@ -549,9 +665,9 @@ def locations_to_latex(data: Dict[str, Any], full_document: bool = False) -> str
         if item.get("nation"):
             meta.append(f"Pays : {item['nation']}")
         if meta:
-            lines.extend([latex_escape("; ".join(meta)), "", ""])
+            lines.extend([latex_escape("; ".join(meta)), ""])
         if item.get("description"):
-            lines.extend([item["description"], "", ""])
+            lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
 
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title="Lieux") if full_document else body
@@ -563,6 +679,7 @@ def write_separate_chapter_files(
     output_format: str,
     include_scene_headers: bool = False,
     latex_full: bool = False,
+    split_lines: bool = False,
 ) -> List[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     written_files: List[Path] = []
@@ -577,13 +694,18 @@ def write_separate_chapter_files(
         chapter_payload = [chapter]
 
         if output_format == "markdown":
-            content = to_markdown(chapter_payload, include_scene_headers=include_scene_headers)
+            content = to_markdown(
+                chapter_payload,
+                include_scene_headers=include_scene_headers,
+                split_lines=split_lines,
+            )
         else:
             content = to_latex(
                 chapter_payload,
                 include_scene_headers=include_scene_headers,
                 full_document=latex_full,
                 title=chapter["chapter_title"],
+                split_lines=split_lines,
             )
 
         path.write_text(content, encoding="utf-8")
@@ -690,6 +812,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.scenes and fmt not in {"markdown", "latex"}:
         parser.error("l'option --scenes nécessite --format markdown ou --format latex")
 
+    if args.split_lines and fmt not in {"markdown", "latex"}:
+        parser.error("l'option --split-lines nécessite --format markdown ou --format latex")
+
     if args.separate_chapters and fmt not in {"markdown", "latex"}:
         parser.error("l'option --separate-chapters nécessite --format markdown ou --format latex")
 
@@ -713,9 +838,11 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {PROGRAM_NAME} projet.json --format json --json-full\n"
             f"  {PROGRAM_NAME} projet.json --format markdown -o roman.md\n"
             f"  {PROGRAM_NAME} projet.json --format markdown --scenes -o roman-scenes.md\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown --split-lines -o roman-lignes.md\n"
             f"  {PROGRAM_NAME} projet.json --format markdown --separate-chapters -o chapitres_md\n"
             f"  {PROGRAM_NAME} projet.json --format latex -o roman.tex\n"
             f"  {PROGRAM_NAME} projet.json --format latex --latex-full -o roman-complet.tex\n"
+            f"  {PROGRAM_NAME} projet.json --format latex --scenes --split-lines -o roman-lignes.tex\n"
             f"  {PROGRAM_NAME} projet.json --format latex --scenes --separate-chapters -o chapitres_tex\n"
             f"  {PROGRAM_NAME} projet.json --format markdown --subs -o roman-subs.md\n"
             f"  {PROGRAM_NAME} projet.json --export-characters --format json -o personnages.json\n"
@@ -736,12 +863,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Nom du fichier ou du répertoire de sortie",
     )
 
-    parser.add_argument(
+    format_arg = parser.add_argument(
         "--format",
         type=normalize_output_format,
         default="json",
         help="Format de sortie : json, markdown/md, latex/tex (défaut : json)",
     )
+    if argcomplete is not None:
+        format_arg.completer = format_completer
 
     parser.add_argument(
         "--subs",
@@ -771,6 +900,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--scenes",
         action="store_true",
         help="En Markdown/LaTeX, ajoute les noms des scènes comme sous-titres",
+    )
+
+    parser.add_argument(
+        "--split-lines",
+        action="store_true",
+        help=(
+            "En Markdown/LaTeX, écrit chaque phrase d'un paragraphe sur sa propre ligne, "
+            "en coupant uniquement sur la ponctuation de fin de phrase"
+        ),
     )
 
     parser.add_argument(
@@ -833,28 +971,32 @@ def main() -> int:
         return 1
 
     fmt = args.format
+    text_format = fmt if fmt in {"markdown", "latex"} else "json"
 
     if args.export_characters:
         export = build_character_export(
             data,
-            output_format="latex" if fmt == "latex" else "markdown" if fmt == "markdown" else "json",
+            output_format=text_format,
             subs=args.subs,
         )
+        output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="characters")
+
         if fmt == "json":
             payload = apply_substitutions_to_object(export) if args.subs else export
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="characters")
             output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         elif fmt == "markdown":
-            content = characters_to_markdown(export)
+            content = characters_to_markdown(export, split_lines=args.split_lines)
             if args.subs:
                 content = apply_french_substitutions(content)
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="characters")
             output_path.write_text(content, encoding="utf-8")
         else:
-            content = characters_to_latex(export, full_document=args.latex_full)
+            content = characters_to_latex(
+                export,
+                full_document=args.latex_full,
+                split_lines=args.split_lines,
+            )
             if args.subs:
                 content = apply_french_substitutions(content)
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="characters")
             output_path.write_text(content, encoding="utf-8")
 
         print(output_path)
@@ -863,24 +1005,27 @@ def main() -> int:
     if args.export_locations:
         export = build_location_export(
             data,
-            output_format="latex" if fmt == "latex" else "markdown" if fmt == "markdown" else "json",
+            output_format=text_format,
             subs=args.subs,
         )
+        output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="locations")
+
         if fmt == "json":
             payload = apply_substitutions_to_object(export) if args.subs else export
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="locations")
             output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         elif fmt == "markdown":
-            content = locations_to_markdown(export)
+            content = locations_to_markdown(export, split_lines=args.split_lines)
             if args.subs:
                 content = apply_french_substitutions(content)
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="locations")
             output_path.write_text(content, encoding="utf-8")
         else:
-            content = locations_to_latex(export, full_document=args.latex_full)
+            content = locations_to_latex(
+                export,
+                full_document=args.latex_full,
+                split_lines=args.split_lines,
+            )
             if args.subs:
                 content = apply_french_substitutions(content)
-            output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="locations")
             output_path.write_text(content, encoding="utf-8")
 
         print(output_path)
@@ -888,7 +1033,7 @@ def main() -> int:
 
     structured = build_structure(
         data,
-        output_format=fmt if fmt in {"markdown", "latex"} else "json",
+        output_format=text_format,
         include_text=args.json_full,
         subs=args.subs,
     )
@@ -907,6 +1052,7 @@ def main() -> int:
             output_format=fmt,
             include_scene_headers=args.scenes,
             latex_full=args.latex_full,
+            split_lines=args.split_lines,
         )
         for path in written_files:
             print(path)
@@ -917,7 +1063,11 @@ def main() -> int:
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     elif fmt == "markdown":
-        content = to_markdown(structured, include_scene_headers=args.scenes)
+        content = to_markdown(
+            structured,
+            include_scene_headers=args.scenes,
+            split_lines=args.split_lines,
+        )
         if args.subs:
             content = apply_french_substitutions(content)
         output_path.write_text(content, encoding="utf-8")
@@ -930,6 +1080,7 @@ def main() -> int:
             include_scene_headers=args.scenes,
             full_document=args.latex_full,
             title=title,
+            split_lines=args.split_lines,
         )
         if args.subs:
             content = apply_french_substitutions(content)
