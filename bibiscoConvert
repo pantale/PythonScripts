@@ -1,0 +1,657 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+# -*- coding: utf-8 -*-
+
+import argparse
+import json
+import re
+import sys
+from html import unescape
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any, Dict, List
+
+try:
+    import argcomplete
+except ImportError:  # pragma: no cover
+    argcomplete = None
+
+
+PROGRAM_NAME = "bibiscoConvert"
+PROGRAM_VERSION = "1.0-0"
+PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
+
+
+class RichTextBlockExtractor(HTMLParser):
+    def __init__(self, markdown: bool = False):
+        super().__init__(convert_charrefs=False)
+        self.markdown = markdown
+        self.in_paragraph = False
+        self.current_parts: List[str] = []
+        self.blocks: List[str] = []
+        self.tag_stack: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs):
+        tag = tag.lower()
+        if tag == "p":
+            self.in_paragraph = True
+            self.current_parts = []
+            return
+
+        if not self.in_paragraph:
+            return
+
+        if tag in {"b", "strong", "i", "em", "u"}:
+            self.tag_stack.append(tag)
+            self.current_parts.append(self._open_marker(tag))
+        elif tag == "br":
+            self.current_parts.append("\n")
+
+    def handle_endtag(self, tag: str):
+        tag = tag.lower()
+        if tag == "p":
+            if self.in_paragraph:
+                self.close_open_tags()
+                text = "".join(self.current_parts)
+                text = self._normalize(text)
+                if text:
+                    self.blocks.append(text)
+            self.current_parts = []
+            self.in_paragraph = False
+            return
+
+        if not self.in_paragraph:
+            return
+
+        if tag in {"b", "strong", "i", "em", "u"}:
+            self.current_parts.append(self._close_marker(tag))
+            for idx in range(len(self.tag_stack) - 1, -1, -1):
+                if self.tag_stack[idx] == tag:
+                    del self.tag_stack[idx]
+                    break
+
+    def handle_data(self, data: str):
+        if self.in_paragraph:
+            self.current_parts.append(data)
+
+    def handle_entityref(self, name: str):
+        if self.in_paragraph:
+            self.current_parts.append(unescape(f"&{name};"))
+
+    def handle_charref(self, name: str):
+        if self.in_paragraph:
+            self.current_parts.append(unescape(f"&#{name};"))
+
+    def close_open_tags(self):
+        while self.tag_stack:
+            tag = self.tag_stack.pop()
+            self.current_parts.append(self._close_marker(tag))
+
+    def _open_marker(self, tag: str) -> str:
+        if self.markdown:
+            if tag in {"b", "strong"}:
+                return "**"
+            if tag in {"i", "em"}:
+                return "*"
+            if tag == "u":
+                return "<u>"
+        else:
+            if tag in {"b", "strong"}:
+                return "<strong>"
+            if tag in {"i", "em"}:
+                return "<em>"
+            if tag == "u":
+                return "<u>"
+        return ""
+
+    def _close_marker(self, tag: str) -> str:
+        if self.markdown:
+            if tag in {"b", "strong"}:
+                return "**"
+            if tag in {"i", "em"}:
+                return "*"
+            if tag == "u":
+                return "</u>"
+        else:
+            if tag in {"b", "strong"}:
+                return "</strong>"
+            if tag in {"i", "em"}:
+                return "</em>"
+            if tag == "u":
+                return "</u>"
+        return ""
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        text = unescape(text).replace("\xa0", " ")
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        text = re.sub(r" *\n *", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+
+def extract_blocks(html_fragment: str, markdown: bool = False) -> List[str]:
+    if not html_fragment:
+        return []
+
+    parser = RichTextBlockExtractor(markdown=markdown)
+    parser.feed(html_fragment)
+    parser.close()
+
+    if parser.blocks:
+        return parser.blocks
+
+    text = unescape(re.sub(r"<[^>]+>", "", html_fragment)).strip()
+    return [text] if text else []
+
+
+def html_to_text(html_fragment: str, markdown: bool = False) -> str:
+    blocks = extract_blocks(html_fragment, markdown=markdown)
+    return "\n\n".join(blocks)
+
+
+def slugify(value: str) -> str:
+    value = unescape(value).strip().lower()
+    value = re.sub(r"[^\w\s-]", "", value, flags=re.UNICODE)
+    value = re.sub(r"[-\s]+", "-", value, flags=re.UNICODE)
+    return value.strip("-") or "chapitre"
+
+
+def strip_markup(text: str) -> str:
+    text = re.sub(r"</?(strong|em|u)>", "", text)
+    text = re.sub(r"[*_`#>-]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def get_collection(data: Dict[str, Any], name: str) -> List[Dict[str, Any]]:
+    for collection in data.get("collections", []):
+        if collection.get("name") == name:
+            return collection.get("data", [])
+    return []
+
+
+def get_current_revision(scene: Dict[str, Any]) -> Dict[str, Any]:
+    revisions = scene.get("revisions", [])
+    revision_index = scene.get("revision", 0)
+    if 0 <= revision_index < len(revisions):
+        return revisions[revision_index]
+    return {}
+
+
+def build_structure(data: Dict[str, Any], markdown: bool = False, full: bool = False) -> List[Dict[str, Any]]:
+    chapters = sorted(get_collection(data, "chapters"), key=lambda c: c.get("position", 0))
+    scenes = sorted(get_collection(data, "scenes"), key=lambda s: (s.get("chapterid", 0), s.get("position", 0)))
+
+    chapter_map: Dict[Any, Dict[str, Any]] = {}
+    output: List[Dict[str, Any]] = []
+
+    for chapter in chapters:
+        chapter_id = chapter.get("$loki")
+        chapter_entry = {
+            "chapter_id": chapter_id,
+            "chapter_title": chapter.get("title", ""),
+            "chapter_position": chapter.get("position"),
+            "chapter_words": chapter.get("words", 0),
+            "chapter_characters": chapter.get("characters", 0),
+            "scenes": [],
+        }
+        chapter_map[chapter_id] = chapter_entry
+        output.append(chapter_entry)
+
+    for scene in scenes:
+        revision = get_current_revision(scene)
+        blocks = extract_blocks(revision.get("text", ""), markdown=markdown)
+
+        scene_entry = {
+            "scene_id": scene.get("$loki"),
+            "scene_title": scene.get("title", ""),
+            "scene_position": scene.get("position"),
+            "scene_status": scene.get("status"),
+            "blocks": blocks,
+        }
+
+        if full:
+            scene_entry.update(
+                {
+                    "text": "\n\n".join(blocks),
+                    "words": revision.get("words", scene.get("words", 0)),
+                    "characters": revision.get("characters", scene.get("characters", 0)),
+                }
+            )
+
+        chapter_id = scene.get("chapterid")
+        if chapter_id not in chapter_map:
+            orphan = {
+                "chapter_id": chapter_id,
+                "chapter_title": f"Chapitre inconnu {chapter_id}",
+                "chapter_position": None,
+                "chapter_words": 0,
+                "chapter_characters": 0,
+                "scenes": [],
+            }
+            chapter_map[chapter_id] = orphan
+            output.append(orphan)
+
+        chapter_map[chapter_id]["scenes"].append(scene_entry)
+
+    return output
+
+
+def build_character_export(data: Dict[str, Any], markdown: bool = False) -> Dict[str, Any]:
+    main_characters = sorted(get_collection(data, "maincharacters"), key=lambda c: c.get("position", 0))
+    secondary_characters = sorted(get_collection(data, "secondarycharacters"), key=lambda c: c.get("position", 0))
+
+    def convert_character(character: Dict[str, Any], category: str) -> Dict[str, Any]:
+        return {
+            "id": character.get("$loki"),
+            "category": category,
+            "position": character.get("position"),
+            "status": character.get("status"),
+            "name": character.get("name", ""),
+            "description": html_to_text(character.get("description", ""), markdown=markdown),
+            "notes": html_to_text(character.get("notes", {}).get("text", ""), markdown=markdown),
+            "conflict": html_to_text(character.get("conflict", {}).get("text", ""), markdown=markdown),
+            "evolution": html_to_text(character.get("evolutionduringthestory", {}).get("text", ""), markdown=markdown),
+            "life_before_story": html_to_text(character.get("lifebeforestorybeginning", {}).get("text", ""), markdown=markdown),
+            "images": [img.get("filename") for img in character.get("images", []) if img.get("filename")],
+        }
+
+    characters = [convert_character(c, "main") for c in main_characters]
+    characters.extend(convert_character(c, "secondary") for c in secondary_characters)
+
+    return {
+        "count": len(characters),
+        "main_count": len(main_characters),
+        "secondary_count": len(secondary_characters),
+        "characters": characters,
+    }
+
+
+def build_location_export(data: Dict[str, Any], markdown: bool = False) -> Dict[str, Any]:
+    locations = sorted(get_collection(data, "locations"), key=lambda c: c.get("position", 0))
+
+    location_items = []
+    for location in locations:
+        location_items.append(
+            {
+                "id": location.get("$loki"),
+                "position": location.get("position"),
+                "status": location.get("status"),
+                "location": location.get("location", ""),
+                "city": location.get("city", ""),
+                "state": location.get("state", ""),
+                "nation": location.get("nation", ""),
+                "description": html_to_text(location.get("description", ""), markdown=markdown),
+                "images": [img.get("filename") for img in location.get("images", []) if img.get("filename")],
+            }
+        )
+
+    return {
+        "count": len(location_items),
+        "locations": location_items,
+    }
+
+
+def scene_to_markdown(scene: Dict[str, Any], full: bool = False, include_scene_header: bool = True) -> List[str]:
+    lines: List[str] = []
+    if include_scene_header:
+        lines.extend([f"## {scene['scene_title']}", ""])
+
+    for block in scene.get("blocks", []):
+        lines.append(block)
+        lines.append("")
+
+    if full and scene.get("text"):
+        lines.extend(["### Texte complet", "", scene["text"], ""])
+
+    return lines
+
+
+def to_markdown(data: List[Dict[str, Any]], full: bool = False, include_scene_headers: bool = False) -> str:
+    lines: List[str] = []
+
+    for chapter in data:
+        lines.append(f"# {chapter['chapter_title']}")
+        lines.append("")
+        for scene in chapter.get("scenes", []):
+            lines.extend(scene_to_markdown(scene, full=full, include_scene_header=include_scene_headers))
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def characters_to_markdown(data: Dict[str, Any]) -> str:
+    lines: List[str] = ["# Personnages", ""]
+
+    if data.get("main_count", 0):
+        lines.extend(["## Personnages principaux", ""])
+        for item in data["characters"]:
+            if item["category"] != "main":
+                continue
+            lines.extend([f"### {item['name']}", ""])
+            if item.get("description"):
+                lines.extend([item["description"], ""])
+            if item.get("notes"):
+                lines.extend(["#### Notes", "", item["notes"], ""])
+            if item.get("conflict"):
+                lines.extend(["#### Conflit", "", item["conflict"], ""])
+            if item.get("evolution"):
+                lines.extend(["#### Évolution", "", item["evolution"], ""])
+            if item.get("life_before_story"):
+                lines.extend(["#### Vie avant le récit", "", item["life_before_story"], ""])
+
+    if data.get("secondary_count", 0):
+        lines.extend(["## Personnages secondaires", ""])
+        for item in data["characters"]:
+            if item["category"] != "secondary":
+                continue
+            lines.extend([f"### {item['name']}", ""])
+            if item.get("description"):
+                lines.extend([item["description"], ""])
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def locations_to_markdown(data: Dict[str, Any]) -> str:
+    lines: List[str] = ["# Lieux", ""]
+    for item in data["locations"]:
+        title = item.get("location") or "Lieu sans nom"
+        lines.extend([f"## {title}", ""])
+        meta = []
+        if item.get("city"):
+            meta.append(f"Ville : {item['city']}")
+        if item.get("state"):
+            meta.append(f"Région : {item['state']}")
+        if item.get("nation"):
+            meta.append(f"Pays : {item['nation']}")
+        if meta:
+            lines.extend(["; ".join(meta), ""])
+        if item.get("description"):
+            lines.extend([item["description"], ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_chapter_markdown_files(data: List[Dict[str, Any]], output_dir: Path, full: bool = False, include_scene_headers: bool = True) -> List[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written_files: List[Path] = []
+
+    for index, chapter in enumerate(data, start=1):
+        slug = slugify(chapter["chapter_title"])
+        filename = f"{index:02d}-{slug}.md"
+        path = output_dir / filename
+
+        lines: List[str] = [f"# {chapter['chapter_title']}", ""]
+        for scene in chapter.get("scenes", []):
+            lines.extend(scene_to_markdown(scene, full=full, include_scene_header=include_scene_headers))
+
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        written_files.append(path)
+
+    index_path = output_dir / "index.json"
+    index_payload = [
+        {
+            "chapter_id": chapter["chapter_id"],
+            "chapter_title": chapter["chapter_title"],
+            "file": path.name,
+        }
+        for chapter, path in zip(data, written_files)
+    ]
+    index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    written_files.append(index_path)
+
+    return written_files
+
+
+def display_structure(data: Dict[str, Any], structured: List[Dict[str, Any]]) -> None:
+    project = get_collection(data, "project")
+    project_info = project[0] if project else {}
+    total_chapters = len(structured)
+    total_scenes = sum(len(chapter.get("scenes", [])) for chapter in structured)
+    total_blocks = sum(len(scene.get("blocks", [])) for chapter in structured for scene in chapter.get("scenes", []))
+    total_words = sum(scene.get("words", 0) for chapter in structured for scene in chapter.get("scenes", []))
+    total_characters = sum(scene.get("characters", 0) for chapter in structured for scene in chapter.get("scenes", []))
+
+    print("Structure du roman")
+    print("------------------")
+    if project_info:
+        print(f"Titre      : {project_info.get('name', '')}")
+        print(f"Auteur     : {project_info.get('author', '')}")
+        print(f"Langue     : {project_info.get('language', '')}")
+    print(f"Chapitres  : {total_chapters}")
+    print(f"Scènes     : {total_scenes}")
+    print(f"Blocs      : {total_blocks}")
+    print(f"Mots       : {total_words}")
+    print(f"Caractères : {total_characters}")
+    print()
+
+    for idx, chapter in enumerate(structured, start=1):
+        chapter_words = sum(scene.get("words", 0) for scene in chapter.get("scenes", []))
+        chapter_characters = sum(scene.get("characters", 0) for scene in chapter.get("scenes", []))
+        chapter_blocks = sum(len(scene.get("blocks", [])) for scene in chapter.get("scenes", []))
+        print(f"{idx:02d}. {chapter['chapter_title']}")
+        print(
+            f"    position={chapter.get('chapter_position')} | scènes={len(chapter.get('scenes', []))} | "
+            f"blocs={chapter_blocks} | mots={chapter_words} | caractères={chapter_characters}"
+        )
+
+        for jdx, scene in enumerate(chapter.get("scenes", []), start=1):
+            preview = strip_markup(scene["blocks"][0]) if scene.get("blocks") else ""
+            if len(preview) > 90:
+                preview = preview[:87] + "..."
+            print(
+                f"    {idx:02d}.{jdx:02d} {scene['scene_title']} | position={scene.get('scene_position')} | "
+                f"statut={scene.get('scene_status')} | blocs={len(scene.get('blocks', []))} | "
+                f"mots={scene.get('words', 0)} | caractères={scene.get('characters', 0)}"
+            )
+            if preview:
+                print(f"           extrait : {preview}")
+        print()
+
+    character_export = build_character_export(data)
+    location_export = build_location_export(data)
+    print(f"Personnages principaux   : {character_export['main_count']}")
+    print(f"Personnages secondaires  : {character_export['secondary_count']}")
+    print(f"Lieux                    : {location_export['count']}")
+
+
+def default_output_path(input_path: Path, markdown: bool, chapters: bool, kind: str = "scenes") -> Path:
+    if kind == "characters":
+        suffix = ".md" if markdown else ".json"
+        return input_path.with_name(f"{input_path.stem}_characters{suffix}")
+    if kind == "locations":
+        suffix = ".md" if markdown else ".json"
+        return input_path.with_name(f"{input_path.stem}_locations{suffix}")
+    if chapters:
+        return input_path.with_name(f"{input_path.stem}_chapters")
+    suffix = ".md" if markdown else ".json"
+    return input_path.with_name(f"{input_path.stem}_scenes{suffix}")
+
+
+def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.chapters and not args.markdown:
+        parser.error("l'option --chapters nécessite --markdown")
+    if args.scenes and not args.markdown:
+        parser.error("l'option --scenes nécessite --markdown")
+    if args.chapters and (args.export_characters or args.export_locations):
+        parser.error("l'option --chapters n'est valable que pour l'export des scènes")
+    if args.export_characters and args.export_locations:
+        parser.error("choisir soit --export-characters soit --export-locations")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM_NAME,
+        description=(
+            "Extrait les scènes d'un projet Bibisco par chapitres en conservant gras, italique et souligné. "
+            "Par défaut, la sortie ne contient que les blocs de texte."
+        ),
+        epilog=(
+            f"Version : {PROGRAM_VERSION}\n"
+            f"{PROGRAM_COPYRIGHT}\n\n"
+            "Exemples :\n"
+            f"  {PROGRAM_NAME} projet.json\n"
+            f"  {PROGRAM_NAME} projet.json --display\n"
+            f"  {PROGRAM_NAME} projet.json --full\n"
+            f"  {PROGRAM_NAME} projet.json --markdown -o roman.md\n"
+            f"  {PROGRAM_NAME} projet.json --markdown --scenes -o roman-scenes.md\n"
+            f"  {PROGRAM_NAME} projet.json --markdown --chapters -o chapitres_md\n"
+            f"  {PROGRAM_NAME} projet.json --export-characters -o personnages.json\n"
+            f"  {PROGRAM_NAME} projet.json --export-locations --markdown -o lieux.md\n"
+            f"  {PROGRAM_NAME} --version"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("input", type=Path, help="Fichier JSON Bibisco en entrée")
+    parser.add_argument("output_positional", nargs="?", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "-o",
+        "--output",
+        dest="output_option",
+        type=Path,
+        help="Nom du fichier ou du répertoire de sortie",
+    )
+    parser.add_argument(
+        "--display",
+        action="store_true",
+        help=(
+            "Affiche sur la sortie standard la structure du roman, les chapitres, les scènes et les "
+            "statistiques principales"
+        ),
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "Ajoute aussi un champ 'text' concaténant tous les blocs de chaque scène, "
+            "ainsi que les métadonnées words et characters"
+        ),
+    )
+    parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Génère une sortie Markdown au lieu d'une sortie JSON",
+    )
+    parser.add_argument(
+        "--scenes",
+        action="store_true",
+        help=(
+            "En mode Markdown, ajoute les noms des scènes comme en-têtes de niveau 2. "
+            "Par défaut, seuls les chapitres sont écrits comme en-têtes de niveau 1"
+        ),
+    )
+    parser.add_argument(
+        "--chapters",
+        action="store_true",
+        help=(
+            "Génère un fichier Markdown par chapitre dans un répertoire de sortie "
+            "(nécessite --markdown)"
+        ),
+    )
+    parser.add_argument(
+        "--export-characters",
+        dest="export_characters",
+        action="store_true",
+        help="Exporte les personnages du projet au format JSON ou Markdown",
+    )
+    parser.add_argument(
+        "--export-locations",
+        dest="export_locations",
+        action="store_true",
+        help="Exporte les lieux du projet au format JSON ou Markdown",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {PROGRAM_VERSION}",
+        help="Affiche la version du programme et quitte",
+    )
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    parser = build_parser()
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
+
+    args = parser.parse_args()
+    args.output = args.output_option or args.output_positional
+    validate_args(args, parser)
+    return args
+
+
+def main() -> int:
+    print(PROGRAM_NAME)
+    print(f"Version {PROGRAM_VERSION}")
+    print(PROGRAM_COPYRIGHT)
+    print()
+
+    args = parse_args()
+
+    try:
+        with args.input.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Erreur : fichier introuvable : {args.input}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f"Erreur : JSON invalide : {exc}", file=sys.stderr)
+        return 1
+
+    if args.export_characters:
+        export = build_character_export(data, markdown=args.markdown)
+        output_path = args.output if args.output else default_output_path(args.input, args.markdown, False, kind="characters")
+        if args.markdown:
+            output_path.write_text(characters_to_markdown(export), encoding="utf-8")
+        else:
+            output_path.write_text(json.dumps(export, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(output_path)
+        return 0
+
+    if args.export_locations:
+        export = build_location_export(data, markdown=args.markdown)
+        output_path = args.output if args.output else default_output_path(args.input, args.markdown, False, kind="locations")
+        if args.markdown:
+            output_path.write_text(locations_to_markdown(export), encoding="utf-8")
+        else:
+            output_path.write_text(json.dumps(export, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(output_path)
+        return 0
+
+    structured = build_structure(data, markdown=args.markdown, full=True if args.display else args.full)
+
+    if args.display:
+        display_structure(data, structured)
+        if not args.output and not args.markdown and not args.chapters and not args.full:
+            return 0
+
+    output_path = args.output if args.output else default_output_path(args.input, args.markdown, args.chapters)
+
+    if args.chapters:
+        written_files = write_chapter_markdown_files(
+            structured,
+            output_path,
+            full=args.full or args.display,
+            include_scene_headers=args.scenes,
+        )
+        for path in written_files:
+            print(path)
+        return 0
+
+    if args.markdown:
+        content = to_markdown(
+            structured,
+            full=args.full or args.display,
+            include_scene_headers=args.scenes,
+        )
+        output_path.write_text(content, encoding="utf-8")
+    else:
+        serializable = build_structure(data, markdown=False, full=args.full or args.display)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(serializable, f, ensure_ascii=False, indent=2)
+
+    print(output_path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
