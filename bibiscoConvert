@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -18,10 +19,10 @@ except ImportError:  # pragma: no cover
 
 
 PROGRAM_NAME = "bibiscoConvert"
-PROGRAM_VERSION = "1.2-1"
+PROGRAM_VERSION = "1.2-3"
 PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
 
-NBSP = "\u00A0"
+NBSP = ""
 
 FORMAT_ALIASES = {
     "json": "json",
@@ -307,6 +308,8 @@ def html_to_text(html_fragment: str, output_format: str = "json", subs: bool = F
 
 def slugify(value: str) -> str:
     value = unescape(value).strip().lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = value.encode("ascii", "ignore").decode("ascii")
     value = re.sub(r"[^\w\s-]", "", value, flags=re.UNICODE)
     value = re.sub(r"[-\s]+", "-", value, flags=re.UNICODE)
     return value.strip("-") or "chapitre"
@@ -508,7 +511,7 @@ def scene_to_latex(
 ) -> List[str]:
     lines: List[str] = []
     if include_scene_header:
-        lines.extend([rf"\subsection*{{{latex_escape(scene['scene_title'])}}}", ""])
+        lines.extend([rf"\section{{{latex_escape(scene['scene_title'])}}}", ""])
     for block in scene.get("blocks", []):
         lines.extend([render_split_lines(block, "latex", split_lines), ""])
     return lines
@@ -540,7 +543,7 @@ def to_latex(
 ) -> str:
     lines: List[str] = []
     for chapter in data:
-        lines.extend([rf"\section*{{{latex_escape(chapter['chapter_title'])}}}", ""])
+        lines.extend([rf"\chapter{{{latex_escape(chapter['chapter_title'])}}}", ""])
         for scene in chapter.get("scenes", []):
             lines.extend(
                 scene_to_latex(
@@ -593,14 +596,14 @@ def characters_to_latex(
     full_document: bool = False,
     split_lines: bool = False,
 ) -> str:
-    lines: List[str] = [r"\section*{Personnages}", ""]
+    lines: List[str] = [r"\chapter{Personnages}", ""]
 
     if data.get("main_count", 0):
-        lines.extend([r"\subsection*{Personnages principaux}", ""])
+        lines.extend([r"\section{Personnages principaux}", ""])
         for item in data["characters"]:
             if item["category"] != "main":
                 continue
-            lines.extend([rf"\subsubsection*{{{latex_escape(item['name'])}}}", ""])
+            lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
                 lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
             if item.get("notes"):
@@ -617,11 +620,11 @@ def characters_to_latex(
                 ])
 
     if data.get("secondary_count", 0):
-        lines.extend([r"\subsection*{Personnages secondaires}", ""])
+        lines.extend([r"\section{Personnages secondaires}", ""])
         for item in data["characters"]:
             if item["category"] != "secondary":
                 continue
-            lines.extend([rf"\subsubsection*{{{latex_escape(item['name'])}}}", ""])
+            lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
                 lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
 
@@ -653,10 +656,10 @@ def locations_to_latex(
     full_document: bool = False,
     split_lines: bool = False,
 ) -> str:
-    lines: List[str] = [r"\section*{Lieux}", ""]
+    lines: List[str] = [r"\chapter{Lieux}", ""]
     for item in data["locations"]:
         title = latex_escape(item.get("location") or "Lieu sans nom")
-        lines.extend([rf"\subsection*{{{title}}}", ""])
+        lines.extend([rf"\section{{{title}}}", ""])
         meta = []
         if item.get("city"):
             meta.append(f"Ville : {item['city']}")
@@ -711,18 +714,26 @@ def write_separate_chapter_files(
         path.write_text(content, encoding="utf-8")
         written_files.append(path)
 
-    index_path = output_dir / "index.json"
-    index_payload = [
-        {
-            "chapter_id": chapter["chapter_id"],
-            "chapter_title": chapter["chapter_title"],
-            "file": path.name,
-        }
-        for chapter, path in zip(data, written_files)
-    ]
-    index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    written_files.append(index_path)
+    if output_format == "latex":
+        index_path = output_dir / "index.tex"
+        index_lines = [rf"\input{{{path.name}}}" for path in written_files]
+        index_path.write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+    else:
+        index_path = output_dir / "index.json"
+        index_payload = [
+            {
+                "chapter_id": chapter["chapter_id"],
+                "chapter_title": chapter["chapter_title"],
+                "file": path.name,
+            }
+            for chapter, path in zip(data, written_files)
+        ]
+        index_path.write_text(
+            json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
+    written_files.append(index_path)
     return written_files
 
 
@@ -879,6 +890,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--nb-spaces",
+        action="store_true",
+        help='Avec --subs, utilise des espaces insécables ; sans cette option, NBSP = ""',
+    )
+
+    parser.add_argument(
         "--display",
         action="store_true",
         help="Affiche la structure du roman et les statistiques principales",
@@ -959,6 +976,9 @@ def main() -> int:
     print()
 
     args = parse_args()
+
+    global NBSP
+    NBSP = "\u00A0" if args.nb_spaces else ""
 
     try:
         with args.input.open("r", encoding="utf-8") as f:
