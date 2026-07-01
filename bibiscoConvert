@@ -3,6 +3,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -17,12 +18,13 @@ try:
 except ImportError:  # pragma: no cover
     argcomplete = None
 
-
 PROGRAM_NAME = "bibiscoConvert"
-PROGRAM_VERSION = "1.2-3"
+PROGRAM_VERSION = "1.2-5"
 PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
 
 NBSP = ""
+TIME_NBSP = "\u00A0"
+DONE_STATUS = "done"
 
 FORMAT_ALIASES = {
     "json": "json",
@@ -58,9 +60,34 @@ def apply_french_substitutions(text: str) -> str:
     text = text.replace("...", "…")
 
     text = re.sub(r"\s*([:;!?])", rf"{NBSP}\1", text)
-    text = re.sub(r"(\d{1,2})h(\d{2})", rf"\1{NBSP}h{NBSP}\2", text)
-    text = re.sub(r"(\d{1,2}) h (\d{2})", rf"\1{NBSP}h{NBSP}\2", text)
 
+    # Remplacement des heures du type 6h30, 6 h30, 6h 30 ou 6 h 30
+    # avec espaces insécables autour de h, indépendamment de --nb-spaces.
+    text = re.sub(
+        r"(\d{1,2})\s*h\s*(\d{2})",
+        rf"\1{TIME_NBSP}h{TIME_NBSP}\2",
+        text,
+    )
+
+    return text
+
+
+def apply_latex_substitutions(text: str) -> str:
+    if not text:
+        return text
+
+    text = re.sub(r"(?m)^[ \t]*\*\*\*[ \t]*$", r"\\StarSeparator", text)
+
+    return text
+
+
+def apply_substitutions(text: str, output_format: str = "json") -> str:
+    if not text:
+        return text
+
+    text = apply_french_substitutions(text)
+    if output_format == "latex":
+        text = apply_latex_substitutions(text)
     return text
 
 
@@ -110,13 +137,10 @@ def split_paragraph_into_sentences(text: str) -> List[str]:
 
         if ch == "«":
             inside_french_quotes = True
-
         elif ch == "»":
             inside_french_quotes = False
-
         elif ch == '"':
             inside_straight_quotes = not inside_straight_quotes
-
         elif ch in ".!?…" and not inside_french_quotes and not inside_straight_quotes:
             j = i + 1
             while j < n and text[j] in ".!?…":
@@ -159,10 +183,46 @@ def render_split_lines(text: str, output_format: str, split_lines: bool = False)
             continue
 
         sentences = split_paragraph_into_sentences(paragraph)
-
         rendered_paragraphs.append("\n".join(sentences))
 
     return "\n".join(rendered_paragraphs)
+
+
+def transform_latex_command_paragraph(text: str, final_mode: bool = False) -> str:
+    if not text:
+        return text
+
+    first_line, sep, rest = text.partition("\n")
+    match = re.match(r"^@([^\s:]+):(.*)$", first_line)
+
+    if not match:
+        return text
+
+    if final_mode:
+        return rest if sep else ""
+
+    command_label = latex_escape(f"@{match.group(1)}:")
+    first_line_remainder = match.group(2).lstrip()
+
+    rendered_first_line = rf"\textcolor{{red}}{{\textbf{{{command_label}}}}}"
+    if first_line_remainder:
+        rendered_first_line += rf" \emph{{{first_line_remainder}}}"
+
+    if sep:
+        return rendered_first_line + "\n" + rest
+
+    return rendered_first_line
+
+
+def render_latex_block(text: str, split_lines: bool = False, final_mode: bool = False) -> str:
+    if not text:
+        return text
+
+    text = transform_latex_command_paragraph(text, final_mode=final_mode)
+    if not text.strip():
+        return ""
+
+    return render_split_lines(text, "latex", split_lines)
 
 
 class RichTextBlockExtractor(HTMLParser):
@@ -202,8 +262,8 @@ class RichTextBlockExtractor(HTMLParser):
                 text = self._normalize(text)
                 if text:
                     self.blocks.append(text)
-            self.current_parts = []
-            self.in_paragraph = False
+                self.current_parts = []
+                self.in_paragraph = False
             return
 
         if not self.in_paragraph:
@@ -245,7 +305,7 @@ class RichTextBlockExtractor(HTMLParser):
             if tag in {"i", "em"}:
                 return "*"
             if tag == "u":
-                return "<u>"
+                return ""
 
         elif self.output_format == "latex":
             if tag in {"b", "strong"}:
@@ -264,7 +324,7 @@ class RichTextBlockExtractor(HTMLParser):
             if tag in {"i", "em"}:
                 return "*"
             if tag == "u":
-                return "</u>"
+                return ""
 
         elif self.output_format == "latex":
             if tag in {"b", "strong", "i", "em", "u"}:
@@ -278,7 +338,7 @@ class RichTextBlockExtractor(HTMLParser):
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = text.strip(" \t\r\f\v\n")
         if self.subs:
-            text = apply_french_substitutions(text)
+            text = apply_substitutions(text, self.output_format)
         return text
 
 
@@ -297,7 +357,7 @@ def extract_blocks(html_fragment: str, output_format: str = "json", subs: bool =
     if output_format == "latex":
         text = latex_escape(text)
     if subs:
-        text = apply_french_substitutions(text)
+        text = apply_substitutions(text, output_format)
     return [text] if text else []
 
 
@@ -337,6 +397,36 @@ def get_current_revision(scene: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def is_done(status: Any) -> bool:
+    return str(status).strip().lower() == DONE_STATUS
+
+
+def filter_done_structure(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+
+    for chapter in data:
+        if not is_done(chapter.get("chapter_status")):
+            continue
+
+        scenes = [
+            scene
+            for scene in chapter.get("scenes", [])
+            if is_done(scene.get("scene_status"))
+        ]
+
+        if not scenes:
+            continue
+
+        chapter_copy = copy.deepcopy(chapter)
+        chapter_copy["scenes"] = scenes
+        chapter_copy["chapter_words"] = sum(scene.get("words", 0) for scene in scenes)
+        chapter_copy["chapter_characters"] = sum(scene.get("characters", 0) for scene in scenes)
+
+        filtered.append(chapter_copy)
+
+    return filtered
+
+
 def build_structure(
     data: Dict[str, Any],
     output_format: str = "json",
@@ -344,7 +434,10 @@ def build_structure(
     subs: bool = False,
 ) -> List[Dict[str, Any]]:
     chapters = sorted(get_collection(data, "chapters"), key=lambda c: c.get("position", 0))
-    scenes = sorted(get_collection(data, "scenes"), key=lambda s: (s.get("chapterid", 0), s.get("position", 0)))
+    scenes = sorted(
+        get_collection(data, "scenes"),
+        key=lambda s: (s.get("chapterid", 0), s.get("position", 0)),
+    )
 
     chapter_map: Dict[Any, Dict[str, Any]] = {}
     output: List[Dict[str, Any]] = []
@@ -355,10 +448,12 @@ def build_structure(
             "chapter_id": chapter_id,
             "chapter_title": chapter.get("title", ""),
             "chapter_position": chapter.get("position"),
+            "chapter_status": chapter.get("status"),
             "chapter_words": chapter.get("words", 0),
             "chapter_characters": chapter.get("characters", 0),
             "scenes": [],
         }
+
         chapter_map[chapter_id] = chapter_entry
         output.append(chapter_entry)
 
@@ -389,10 +484,12 @@ def build_structure(
                 "chapter_id": chapter_id,
                 "chapter_title": f"Chapitre inconnu {chapter_id}",
                 "chapter_position": None,
+                "chapter_status": None,
                 "chapter_words": 0,
                 "chapter_characters": 0,
                 "scenes": [],
             }
+
             chapter_map[chapter_id] = orphan
             output.append(orphan)
 
@@ -416,9 +513,21 @@ def build_character_export(
             "position": character.get("position"),
             "status": character.get("status"),
             "name": character.get("name", ""),
-            "description": html_to_text(character.get("description", ""), output_format=output_format, subs=subs),
-            "notes": html_to_text(character.get("notes", {}).get("text", ""), output_format=output_format, subs=subs),
-            "conflict": html_to_text(character.get("conflict", {}).get("text", ""), output_format=output_format, subs=subs),
+            "description": html_to_text(
+                character.get("description", ""),
+                output_format=output_format,
+                subs=subs,
+            ),
+            "notes": html_to_text(
+                character.get("notes", {}).get("text", ""),
+                output_format=output_format,
+                subs=subs,
+            ),
+            "conflict": html_to_text(
+                character.get("conflict", {}).get("text", ""),
+                output_format=output_format,
+                subs=subs,
+            ),
             "evolution": html_to_text(
                 character.get("evolutionduringthestory", {}).get("text", ""),
                 output_format=output_format,
@@ -461,7 +570,11 @@ def build_location_export(
                 "city": location.get("city", ""),
                 "state": location.get("state", ""),
                 "nation": location.get("nation", ""),
-                "description": html_to_text(location.get("description", ""), output_format=output_format, subs=subs),
+                "description": html_to_text(
+                    location.get("description", ""),
+                    output_format=output_format,
+                    subs=subs,
+                ),
                 "images": [img.get("filename") for img in location.get("images", []) if img.get("filename")],
             }
         )
@@ -508,22 +621,32 @@ def scene_to_latex(
     scene: Dict[str, Any],
     include_scene_header: bool = False,
     split_lines: bool = False,
+    final_mode: bool = False,
 ) -> List[str]:
     lines: List[str] = []
     if include_scene_header:
         lines.extend([rf"\section{{{latex_escape(scene['scene_title'])}}}", ""])
+
     for block in scene.get("blocks", []):
-        lines.extend([render_split_lines(block, "latex", split_lines), ""])
+        rendered_block = render_latex_block(
+            block,
+            split_lines=split_lines,
+            final_mode=final_mode,
+        )
+        if rendered_block:
+            lines.extend([rendered_block, ""])
+
     return lines
 
 
 def latex_document(body: str, title: str = "Export Bibisco") -> str:
     return (
-        "\\documentclass[11pt,a4paper]{article}\n"
+        "\\documentclass[11pt,a4paper]{book}\n"
         "\\usepackage[T1]{fontenc}\n"
         "\\usepackage[utf8]{inputenc}\n"
         "\\usepackage[french]{babel}\n"
         "\\usepackage[a4paper,margin=2.5cm]{geometry}\n"
+        "\\usepackage{xcolor}\n"
         "\\usepackage{hyperref}\n"
         "\\title{" + latex_escape(title) + "}\n"
         "\\date{}\n"
@@ -540,6 +663,7 @@ def to_latex(
     full_document: bool = False,
     title: str = "Export Bibisco",
     split_lines: bool = False,
+    final_mode: bool = False,
 ) -> str:
     lines: List[str] = []
     for chapter in data:
@@ -550,8 +674,10 @@ def to_latex(
                     scene,
                     include_scene_header=include_scene_headers,
                     split_lines=split_lines,
+                    final_mode=final_mode,
                 )
             )
+
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title=title) if full_document else body
 
@@ -575,8 +701,10 @@ def characters_to_markdown(data: Dict[str, Any], split_lines: bool = False) -> s
                 lines.extend(["#### Évolution", "", render_split_lines(item["evolution"], "markdown", split_lines), ""])
             if item.get("life_before_story"):
                 lines.extend([
-                    "#### Vie avant le récit", "",
-                    render_split_lines(item["life_before_story"], "markdown", split_lines), ""
+                    "#### Vie avant le récit",
+                    "",
+                    render_split_lines(item["life_before_story"], "markdown", split_lines),
+                    "",
                 ])
 
     if data.get("secondary_count", 0):
@@ -605,19 +733,25 @@ def characters_to_latex(
                 continue
             lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
-                lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
+                rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([rendered, ""])
             if item.get("notes"):
-                lines.extend([r"\paragraph{Notes}", render_split_lines(item["notes"], "latex", split_lines), ""])
+                rendered = render_latex_block(item["notes"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([r"\paragraph{Notes}", rendered, ""])
             if item.get("conflict"):
-                lines.extend([r"\paragraph{Conflit}", render_split_lines(item["conflict"], "latex", split_lines), ""])
+                rendered = render_latex_block(item["conflict"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([r"\paragraph{Conflit}", rendered, ""])
             if item.get("evolution"):
-                lines.extend([r"\paragraph{Évolution}", render_split_lines(item["evolution"], "latex", split_lines), ""])
+                rendered = render_latex_block(item["evolution"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([r"\paragraph{Évolution}", rendered, ""])
             if item.get("life_before_story"):
-                lines.extend([
-                    r"\paragraph{Vie avant le récit}",
-                    render_split_lines(item["life_before_story"], "latex", split_lines),
-                    ""
-                ])
+                rendered = render_latex_block(item["life_before_story"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([r"\paragraph{Vie avant le récit}", rendered, ""])
 
     if data.get("secondary_count", 0):
         lines.extend([r"\section{Personnages secondaires}", ""])
@@ -626,7 +760,9 @@ def characters_to_latex(
                 continue
             lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
             if item.get("description"):
-                lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
+                rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
+                if rendered:
+                    lines.extend([rendered, ""])
 
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title="Personnages") if full_document else body
@@ -670,7 +806,9 @@ def locations_to_latex(
         if meta:
             lines.extend([latex_escape("; ".join(meta)), ""])
         if item.get("description"):
-            lines.extend([render_split_lines(item["description"], "latex", split_lines), ""])
+            rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([rendered, ""])
 
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title="Lieux") if full_document else body
@@ -683,6 +821,7 @@ def write_separate_chapter_files(
     include_scene_headers: bool = False,
     latex_full: bool = False,
     split_lines: bool = False,
+    final_mode: bool = False,
 ) -> List[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     written_files: List[Path] = []
@@ -709,6 +848,7 @@ def write_separate_chapter_files(
                 full_document=latex_full,
                 title=chapter["chapter_title"],
                 split_lines=split_lines,
+                final_mode=final_mode,
             )
 
         path.write_text(content, encoding="utf-8")
@@ -767,8 +907,12 @@ def display_structure(data: Dict[str, Any], structured: List[Dict[str, Any]]) ->
 
         print(f"{idx:02d}. {chapter['chapter_title']}")
         print(
-            f"    position={chapter.get('chapter_position')} | scènes={len(chapter.get('scenes', []))} | "
-            f"blocs={chapter_blocks} | mots={chapter_words} | caractères={chapter_characters}"
+            f" statut={chapter.get('chapter_status')} | "
+            f"position={chapter.get('chapter_position')} | "
+            f"scènes={len(chapter.get('scenes', []))} | "
+            f"blocs={chapter_blocks} | "
+            f"mots={chapter_words} | "
+            f"caractères={chapter_characters}"
         )
 
         for jdx, scene in enumerate(chapter.get("scenes", []), start=1):
@@ -777,13 +921,17 @@ def display_structure(data: Dict[str, Any], structured: List[Dict[str, Any]]) ->
                 preview = preview[:87] + "..."
 
             print(
-                f"    {idx:02d}.{jdx:02d} {scene['scene_title']} | position={scene.get('scene_position')} | "
-                f"statut={scene.get('scene_status')} | blocs={len(scene.get('blocks', []))} | "
-                f"mots={scene.get('words', 0)} | caractères={scene.get('characters', 0)}"
+                f" {idx:02d}.{jdx:02d} {scene['scene_title']} | "
+                f"position={scene.get('scene_position')} | "
+                f"statut={scene.get('scene_status')} | "
+                f"blocs={len(scene.get('blocks', []))} | "
+                f"mots={scene.get('words', 0)} | "
+                f"caractères={scene.get('characters', 0)}"
             )
 
             if preview:
-                print(f"         extrait : {preview}")
+                print(f" extrait : {preview}")
+
         print()
 
     character_export = build_character_export(data)
@@ -820,6 +968,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.latex_full and fmt != "latex":
         parser.error("l'option --latex-full nécessite --format latex")
 
+    if args.final and fmt != "latex":
+        parser.error("l'option --final nécessite --format latex")
+
     if args.scenes and fmt not in {"markdown", "latex"}:
         parser.error("l'option --scenes nécessite --format markdown ou --format latex")
 
@@ -831,6 +982,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     if args.separate_chapters and (args.export_characters or args.export_locations):
         parser.error("l'option --separate-chapters n'est valable que pour l'export des scènes")
+
+    if args.final and (args.export_characters or args.export_locations):
+        parser.error("l'option --final n'est valable que pour l'export des scènes en LaTeX")
 
     if args.export_characters and args.export_locations:
         parser.error("choisir soit --export-characters soit --export-locations")
@@ -844,21 +998,22 @@ def build_parser() -> argparse.ArgumentParser:
             f"Version : {PROGRAM_VERSION}\n"
             f"{PROGRAM_COPYRIGHT}\n\n"
             "Exemples :\n"
-            f"  {PROGRAM_NAME} projet.json\n"
-            f"  {PROGRAM_NAME} projet.json --display\n"
-            f"  {PROGRAM_NAME} projet.json --format json --json-full\n"
-            f"  {PROGRAM_NAME} projet.json --format markdown -o roman.md\n"
-            f"  {PROGRAM_NAME} projet.json --format markdown --scenes -o roman-scenes.md\n"
-            f"  {PROGRAM_NAME} projet.json --format markdown --split-lines -o roman-lignes.md\n"
-            f"  {PROGRAM_NAME} projet.json --format markdown --separate-chapters -o chapitres_md\n"
-            f"  {PROGRAM_NAME} projet.json --format latex -o roman.tex\n"
-            f"  {PROGRAM_NAME} projet.json --format latex --latex-full -o roman-complet.tex\n"
-            f"  {PROGRAM_NAME} projet.json --format latex --scenes --split-lines -o roman-lignes.tex\n"
-            f"  {PROGRAM_NAME} projet.json --format latex --scenes --separate-chapters -o chapitres_tex\n"
-            f"  {PROGRAM_NAME} projet.json --format markdown --subs -o roman-subs.md\n"
-            f"  {PROGRAM_NAME} projet.json --export-characters --format json -o personnages.json\n"
-            f"  {PROGRAM_NAME} projet.json --export-locations --format latex -o lieux.tex\n"
-            f"  {PROGRAM_NAME} --version"
+            f" {PROGRAM_NAME} projet.json\n"
+            f" {PROGRAM_NAME} projet.json --display\n"
+            f" {PROGRAM_NAME} projet.json --format json --json-full\n"
+            f" {PROGRAM_NAME} projet.json --format markdown -o roman.md\n"
+            f" {PROGRAM_NAME} projet.json --format markdown --scenes -o roman-scenes.md\n"
+            f" {PROGRAM_NAME} projet.json --format markdown --split-lines -o roman-lignes.md\n"
+            f" {PROGRAM_NAME} projet.json --format markdown --separate-chapters -o chapitres_md\n"
+            f" {PROGRAM_NAME} projet.json --format latex -o roman.tex\n"
+            f" {PROGRAM_NAME} projet.json --format latex --latex-full -o roman-complet.tex\n"
+            f" {PROGRAM_NAME} projet.json --format latex --final -o roman-final.tex\n"
+            f" {PROGRAM_NAME} projet.json --format latex --scenes --split-lines -o roman-lignes.tex\n"
+            f" {PROGRAM_NAME} projet.json --format latex --scenes --separate-chapters -o chapitres_tex\n"
+            f" {PROGRAM_NAME} projet.json --format markdown --subs -o roman-subs.md\n"
+            f" {PROGRAM_NAME} projet.json --export-characters --format json -o personnages.json\n"
+            f" {PROGRAM_NAME} projet.json --export-locations --format latex -o lieux.tex\n"
+            f" {PROGRAM_NAME} --version"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -880,6 +1035,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="json",
         help="Format de sortie : json, markdown/md, latex/tex (défaut : json)",
     )
+
     if argcomplete is not None:
         format_arg.completer = format_completer
 
@@ -892,7 +1048,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--nb-spaces",
         action="store_true",
-        help='Avec --subs, utilise des espaces insécables ; sans cette option, NBSP = ""',
+        help="Avec --subs, utilise des espaces insécables pour la ponctuation et les guillemets ; les heures utilisent toujours des insécables",
     )
 
     parser.add_argument(
@@ -911,6 +1067,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--latex-full",
         action="store_true",
         help="En LaTeX, génère un document complet compilable avec préambule minimal",
+    )
+
+    parser.add_argument(
+        "--final",
+        action="store_true",
+        help="En LaTeX, n'exporte que les chapitres et les scènes dont le statut vaut done",
     )
 
     parser.add_argument(
@@ -999,6 +1161,7 @@ def main() -> int:
             output_format=text_format,
             subs=args.subs,
         )
+
         output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="characters")
 
         if fmt == "json":
@@ -1007,7 +1170,7 @@ def main() -> int:
         elif fmt == "markdown":
             content = characters_to_markdown(export, split_lines=args.split_lines)
             if args.subs:
-                content = apply_french_substitutions(content)
+                content = apply_substitutions(content, "markdown")
             output_path.write_text(content, encoding="utf-8")
         else:
             content = characters_to_latex(
@@ -1016,7 +1179,7 @@ def main() -> int:
                 split_lines=args.split_lines,
             )
             if args.subs:
-                content = apply_french_substitutions(content)
+                content = apply_substitutions(content, "latex")
             output_path.write_text(content, encoding="utf-8")
 
         print(output_path)
@@ -1028,6 +1191,7 @@ def main() -> int:
             output_format=text_format,
             subs=args.subs,
         )
+
         output_path = args.output if args.output else default_output_path(args.input, fmt, False, kind="locations")
 
         if fmt == "json":
@@ -1036,7 +1200,7 @@ def main() -> int:
         elif fmt == "markdown":
             content = locations_to_markdown(export, split_lines=args.split_lines)
             if args.subs:
-                content = apply_french_substitutions(content)
+                content = apply_substitutions(content, "markdown")
             output_path.write_text(content, encoding="utf-8")
         else:
             content = locations_to_latex(
@@ -1045,7 +1209,7 @@ def main() -> int:
                 split_lines=args.split_lines,
             )
             if args.subs:
-                content = apply_french_substitutions(content)
+                content = apply_substitutions(content, "latex")
             output_path.write_text(content, encoding="utf-8")
 
         print(output_path)
@@ -1066,13 +1230,15 @@ def main() -> int:
     output_path = args.output if args.output else default_output_path(args.input, fmt, args.separate_chapters)
 
     if args.separate_chapters:
+        export_data = filter_done_structure(structured) if (fmt == "latex" and args.final) else structured
         written_files = write_separate_chapter_files(
-            structured,
+            export_data,
             output_path,
             output_format=fmt,
             include_scene_headers=args.scenes,
             latex_full=args.latex_full,
             split_lines=args.split_lines,
+            final_mode=args.final if fmt == "latex" else False,
         )
         for path in written_files:
             print(path)
@@ -1089,21 +1255,23 @@ def main() -> int:
             split_lines=args.split_lines,
         )
         if args.subs:
-            content = apply_french_substitutions(content)
+            content = apply_substitutions(content, "markdown")
         output_path.write_text(content, encoding="utf-8")
 
     else:
         project = get_collection(data, "project")
         title = project[0].get("name", "Export Bibisco") if project else "Export Bibisco"
+        export_data = filter_done_structure(structured) if args.final else structured
         content = to_latex(
-            structured,
+            export_data,
             include_scene_headers=args.scenes,
             full_document=args.latex_full,
             title=title,
             split_lines=args.split_lines,
+            final_mode=args.final,
         )
         if args.subs:
-            content = apply_french_substitutions(content)
+            content = apply_substitutions(content, "latex")
         output_path.write_text(content, encoding="utf-8")
 
     print(output_path)
