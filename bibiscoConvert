@@ -19,11 +19,10 @@ except ImportError:  # pragma: no cover
     argcomplete = None
 
 PROGRAM_NAME = "bibiscoConvert"
-PROGRAM_VERSION = "1.2-5"
+PROGRAM_VERSION = "1.2-6"
 PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
 
-NBSP = ""
-TIME_NBSP = "\u00A0"
+NBSP = "\u00A0"
 DONE_STATUS = "done"
 
 FORMAT_ALIASES = {
@@ -54,20 +53,14 @@ def apply_french_substitutions(text: str) -> str:
     if not text:
         return text
 
-    text = text.replace("---", "—")
-    text = text.replace("--", "–")
+#    text = text.replace("---", "—")
+#    text = text.replace("--", "–")
     text = re.sub(r'"([^"]*)"', rf"«{NBSP}\1{NBSP}»", text)
     text = text.replace("...", "…")
 
-    text = re.sub(r"\s*([:;!?])", rf"{NBSP}\1", text)
+#    text = re.sub(r"\s*([:;!?])", rf"{NBSP}\1", text)
 
-    # Remplacement des heures du type 6h30, 6 h30, 6h 30 ou 6 h 30
-    # avec espaces insécables autour de h, indépendamment de --nb-spaces.
-    text = re.sub(
-        r"(\d{1,2})\s*h\s*(\d{2})",
-        rf"\1{TIME_NBSP}h{TIME_NBSP}\2",
-        text,
-    )
+    text = re.sub(r"(\d{1,2})\s*h\s*(\d{2})", rf"\1{NBSP}h{NBSP}\2", text)
 
     return text
 
@@ -427,6 +420,15 @@ def filter_done_structure(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return filtered
 
 
+def select_single_chapter(data: List[Dict[str, Any]], chapter_number: int) -> List[Dict[str, Any]]:
+    if chapter_number < 1 or chapter_number > len(data):
+        raise ValueError(
+            f"numéro de chapitre invalide : {chapter_number} "
+            f"(valeurs possibles : 1 à {len(data)})"
+        )
+    return [data[chapter_number - 1]]
+
+
 def build_structure(
     data: Dict[str, Any],
     output_format: str = "json",
@@ -453,7 +455,6 @@ def build_structure(
             "chapter_characters": chapter.get("characters", 0),
             "scenes": [],
         }
-
         chapter_map[chapter_id] = chapter_entry
         output.append(chapter_entry)
 
@@ -489,7 +490,6 @@ def build_structure(
                 "chapter_characters": 0,
                 "scenes": [],
             }
-
             chapter_map[chapter_id] = orphan
             output.append(orphan)
 
@@ -687,34 +687,34 @@ def characters_to_markdown(data: Dict[str, Any], split_lines: bool = False) -> s
 
     if data.get("main_count", 0):
         lines.extend(["## Personnages principaux", ""])
-        for item in data["characters"]:
-            if item["category"] != "main":
-                continue
-            lines.extend([f"### {item['name']}", ""])
-            if item.get("description"):
-                lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
-            if item.get("notes"):
-                lines.extend(["#### Notes", "", render_split_lines(item["notes"], "markdown", split_lines), ""])
-            if item.get("conflict"):
-                lines.extend(["#### Conflit", "", render_split_lines(item["conflict"], "markdown", split_lines), ""])
-            if item.get("evolution"):
-                lines.extend(["#### Évolution", "", render_split_lines(item["evolution"], "markdown", split_lines), ""])
-            if item.get("life_before_story"):
-                lines.extend([
-                    "#### Vie avant le récit",
-                    "",
-                    render_split_lines(item["life_before_story"], "markdown", split_lines),
-                    "",
-                ])
+    for item in data["characters"]:
+        if item["category"] != "main":
+            continue
+        lines.extend([f"### {item['name']}", ""])
+        if item.get("description"):
+            lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
+        if item.get("notes"):
+            lines.extend(["#### Notes", "", render_split_lines(item["notes"], "markdown", split_lines), ""])
+        if item.get("conflict"):
+            lines.extend(["#### Conflit", "", render_split_lines(item["conflict"], "markdown", split_lines), ""])
+        if item.get("evolution"):
+            lines.extend(["#### Évolution", "", render_split_lines(item["evolution"], "markdown", split_lines), ""])
+        if item.get("life_before_story"):
+            lines.extend([
+                "#### Vie avant le récit",
+                "",
+                render_split_lines(item["life_before_story"], "markdown", split_lines),
+                "",
+            ])
 
     if data.get("secondary_count", 0):
         lines.extend(["## Personnages secondaires", ""])
-        for item in data["characters"]:
-            if item["category"] != "secondary":
-                continue
-            lines.extend([f"### {item['name']}", ""])
-            if item.get("description"):
-                lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
+    for item in data["characters"]:
+        if item["category"] != "secondary":
+            continue
+        lines.extend([f"### {item['name']}", ""])
+        if item.get("description"):
+            lines.extend([render_split_lines(item["description"], "markdown", split_lines), ""])
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -728,41 +728,41 @@ def characters_to_latex(
 
     if data.get("main_count", 0):
         lines.extend([r"\section{Personnages principaux}", ""])
-        for item in data["characters"]:
-            if item["category"] != "main":
-                continue
-            lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
-            if item.get("description"):
-                rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([rendered, ""])
-            if item.get("notes"):
-                rendered = render_latex_block(item["notes"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([r"\paragraph{Notes}", rendered, ""])
-            if item.get("conflict"):
-                rendered = render_latex_block(item["conflict"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([r"\paragraph{Conflit}", rendered, ""])
-            if item.get("evolution"):
-                rendered = render_latex_block(item["evolution"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([r"\paragraph{Évolution}", rendered, ""])
-            if item.get("life_before_story"):
-                rendered = render_latex_block(item["life_before_story"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([r"\paragraph{Vie avant le récit}", rendered, ""])
+    for item in data["characters"]:
+        if item["category"] != "main":
+            continue
+        lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
+        if item.get("description"):
+            rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([rendered, ""])
+        if item.get("notes"):
+            rendered = render_latex_block(item["notes"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([r"\paragraph{Notes}", rendered, ""])
+        if item.get("conflict"):
+            rendered = render_latex_block(item["conflict"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([r"\paragraph{Conflit}", rendered, ""])
+        if item.get("evolution"):
+            rendered = render_latex_block(item["evolution"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([r"\paragraph{Évolution}", rendered, ""])
+        if item.get("life_before_story"):
+            rendered = render_latex_block(item["life_before_story"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([r"\paragraph{Vie avant le récit}", rendered, ""])
 
     if data.get("secondary_count", 0):
         lines.extend([r"\section{Personnages secondaires}", ""])
-        for item in data["characters"]:
-            if item["category"] != "secondary":
-                continue
-            lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
-            if item.get("description"):
-                rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
-                if rendered:
-                    lines.extend([rendered, ""])
+    for item in data["characters"]:
+        if item["category"] != "secondary":
+            continue
+        lines.extend([rf"\subsection{{{latex_escape(item['name'])}}}", ""])
+        if item.get("description"):
+            rendered = render_latex_block(item["description"], split_lines=split_lines, final_mode=False)
+            if rendered:
+                lines.extend([rendered, ""])
 
     body = "\n".join(lines).rstrip() + "\n"
     return latex_document(body, title="Personnages") if full_document else body
@@ -921,17 +921,15 @@ def display_structure(data: Dict[str, Any], structured: List[Dict[str, Any]]) ->
                 preview = preview[:87] + "..."
 
             print(
-                f" {idx:02d}.{jdx:02d} {scene['scene_title']} | "
+                f"    {idx:02d}.{jdx:02d} {scene['scene_title']} | "
                 f"position={scene.get('scene_position')} | "
                 f"statut={scene.get('scene_status')} | "
                 f"blocs={len(scene.get('blocks', []))} | "
                 f"mots={scene.get('words', 0)} | "
                 f"caractères={scene.get('characters', 0)}"
             )
-
             if preview:
-                print(f" extrait : {preview}")
-
+                print(f"         extrait : {preview}")
         print()
 
     character_export = build_character_export(data)
@@ -971,6 +969,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.final and fmt != "latex":
         parser.error("l'option --final nécessite --format latex")
 
+    if args.single is not None and args.single < 1:
+        parser.error("l'option --single nécessite un entier strictement positif")
+
     if args.scenes and fmt not in {"markdown", "latex"}:
         parser.error("l'option --scenes nécessite --format markdown ou --format latex")
 
@@ -979,6 +980,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     if args.separate_chapters and fmt not in {"markdown", "latex"}:
         parser.error("l'option --separate-chapters nécessite --format markdown ou --format latex")
+
+    if args.single is not None and args.separate_chapters:
+        parser.error("l'option --single est incompatible avec --separate-chapters")
 
     if args.separate_chapters and (args.export_characters or args.export_locations):
         parser.error("l'option --separate-chapters n'est valable que pour l'export des scènes")
@@ -998,22 +1002,25 @@ def build_parser() -> argparse.ArgumentParser:
             f"Version : {PROGRAM_VERSION}\n"
             f"{PROGRAM_COPYRIGHT}\n\n"
             "Exemples :\n"
-            f" {PROGRAM_NAME} projet.json\n"
-            f" {PROGRAM_NAME} projet.json --display\n"
-            f" {PROGRAM_NAME} projet.json --format json --json-full\n"
-            f" {PROGRAM_NAME} projet.json --format markdown -o roman.md\n"
-            f" {PROGRAM_NAME} projet.json --format markdown --scenes -o roman-scenes.md\n"
-            f" {PROGRAM_NAME} projet.json --format markdown --split-lines -o roman-lignes.md\n"
-            f" {PROGRAM_NAME} projet.json --format markdown --separate-chapters -o chapitres_md\n"
-            f" {PROGRAM_NAME} projet.json --format latex -o roman.tex\n"
-            f" {PROGRAM_NAME} projet.json --format latex --latex-full -o roman-complet.tex\n"
-            f" {PROGRAM_NAME} projet.json --format latex --final -o roman-final.tex\n"
-            f" {PROGRAM_NAME} projet.json --format latex --scenes --split-lines -o roman-lignes.tex\n"
-            f" {PROGRAM_NAME} projet.json --format latex --scenes --separate-chapters -o chapitres_tex\n"
-            f" {PROGRAM_NAME} projet.json --format markdown --subs -o roman-subs.md\n"
-            f" {PROGRAM_NAME} projet.json --export-characters --format json -o personnages.json\n"
-            f" {PROGRAM_NAME} projet.json --export-locations --format latex -o lieux.tex\n"
-            f" {PROGRAM_NAME} --version"
+            f"  {PROGRAM_NAME} projet.json\n"
+            f"  {PROGRAM_NAME} projet.json --display\n"
+            f"  {PROGRAM_NAME} projet.json --format json --json-full\n"
+            f"  {PROGRAM_NAME} projet.json --single 3 --format json -o chapitre3.json\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown -o roman.md\n"
+            f"  {PROGRAM_NAME} projet.json --single 3 --format markdown -o chapitre3.md\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown --scenes -o roman-scenes.md\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown --split-lines -o roman-lignes.md\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown --separate-chapters -o chapitres_md\n"
+            f"  {PROGRAM_NAME} projet.json --format latex -o roman.tex\n"
+            f"  {PROGRAM_NAME} projet.json --single 3 --format latex -o chapitre3.tex\n"
+            f"  {PROGRAM_NAME} projet.json --format latex --latex-full -o roman-complet.tex\n"
+            f"  {PROGRAM_NAME} projet.json --format latex --final -o roman-final.tex\n"
+            f"  {PROGRAM_NAME} projet.json --format latex --scenes --split-lines -o roman-lignes.tex\n"
+            f"  {PROGRAM_NAME} projet.json --format latex --scenes --separate-chapters -o chapitres_tex\n"
+            f"  {PROGRAM_NAME} projet.json --format markdown --subs -o roman-subs.md\n"
+            f"  {PROGRAM_NAME} projet.json --export-characters --format json -o personnages.json\n"
+            f"  {PROGRAM_NAME} projet.json --export-locations --format latex -o lieux.tex\n"
+            f"  {PROGRAM_NAME} --version"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -1046,12 +1053,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--nb-spaces",
-        action="store_true",
-        help="Avec --subs, utilise des espaces insécables pour la ponctuation et les guillemets ; les heures utilisent toujours des insécables",
-    )
-
-    parser.add_argument(
         "--display",
         action="store_true",
         help="Affiche la structure du roman et les statistiques principales",
@@ -1073,6 +1074,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--final",
         action="store_true",
         help="En LaTeX, n'exporte que les chapitres et les scènes dont le statut vaut done",
+    )
+
+    parser.add_argument(
+        "--single",
+        type=int,
+        help="N'exporte qu'un seul chapitre, désigné par son numéro d'ordre (1, 2, 3, ...)",
     )
 
     parser.add_argument(
@@ -1138,9 +1145,6 @@ def main() -> int:
     print()
 
     args = parse_args()
-
-    global NBSP
-    NBSP = "\u00A0" if args.nb_spaces else ""
 
     try:
         with args.input.open("r", encoding="utf-8") as f:
@@ -1221,6 +1225,13 @@ def main() -> int:
         include_text=args.json_full,
         subs=args.subs,
     )
+
+    if args.single is not None:
+        try:
+            structured = select_single_chapter(structured, args.single)
+        except ValueError as exc:
+            print(f"Erreur : {exc}", file=sys.stderr)
+            return 1
 
     if args.display:
         display_structure(data, structured)
