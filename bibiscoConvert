@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
     argcomplete = None
 
 PROGRAM_NAME = "bibiscoConvert"
-PROGRAM_VERSION = "1.2-6"
+PROGRAM_VERSION = "1.2-7"
 PROGRAM_COPYRIGHT = "(c) by Olivier Pantalé 2026"
 
 NBSP = "\u00A0"
@@ -239,7 +239,7 @@ class RichTextBlockExtractor(HTMLParser):
         if not self.in_paragraph:
             return
 
-        if tag in {"b", "strong", "i", "em", "u"}:
+        if tag in {"b", "strong", "i", "em", "u", "sup"}:
             self.tag_stack.append(tag)
             self.current_parts.append(self._open_marker(tag))
         elif tag == "br":
@@ -262,7 +262,7 @@ class RichTextBlockExtractor(HTMLParser):
         if not self.in_paragraph:
             return
 
-        if tag in {"b", "strong", "i", "em", "u"}:
+        if tag in {"b", "strong", "i", "em", "u", "sup"}:
             self.current_parts.append(self._close_marker(tag))
             for idx in range(len(self.tag_stack) - 1, -1, -1):
                 if self.tag_stack[idx] == tag:
@@ -299,6 +299,8 @@ class RichTextBlockExtractor(HTMLParser):
                 return "*"
             if tag == "u":
                 return ""
+            if tag == "sup":
+                return "<sup>"
 
         elif self.output_format == "latex":
             if tag in {"b", "strong"}:
@@ -307,6 +309,8 @@ class RichTextBlockExtractor(HTMLParser):
                 return r"\emph{"
             if tag == "u":
                 return r"\underline{"
+            if tag == "sup":
+                return r"\textsuperscript{"
 
         return ""
 
@@ -318,9 +322,11 @@ class RichTextBlockExtractor(HTMLParser):
                 return "*"
             if tag == "u":
                 return ""
+            if tag == "sup":
+                return "</sup>"
 
         elif self.output_format == "latex":
-            if tag in {"b", "strong", "i", "em", "u"}:
+            if tag in {"b", "strong", "i", "em", "u", "sup"}:
                 return "}"
 
         return ""
