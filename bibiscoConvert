@@ -71,6 +71,9 @@ def apply_latex_substitutions(text: str) -> str:
 
     text = re.sub(r"(?m)^[ \t]*\*\*\*[ \t]*$", r"\\StarSeparator", text)
 
+# Prise en compte d'une heure de type 09:17 sans espace devant le :
+    text = re.sub(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)", r"{\\NoAutoSpacing \1:\2}", text)
+
     return text
 
 
@@ -672,8 +675,20 @@ def to_latex(
     final_mode: bool = False,
 ) -> str:
     lines: List[str] = []
-    for chapter in data:
-        lines.extend([rf"\chapter{{{latex_escape(chapter['chapter_title'])}}}", ""])
+    for fallback_number, chapter in enumerate(data, start=1):
+        position = chapter.get("chapter_position")
+        chapter_number = position + 1 if isinstance(position, int) and position >= 0 else fallback_number
+        lines.extend([
+            "% !TeX spellcheck = fr_FR",
+            "% !TeX root = Book.tex",
+            "%",
+            f"% LaTeX source file of Chapter {chapter_number:02d}",
+            "%",
+            "% (c) by Olivier Pantalé 2026",
+            "%",
+            rf"\chapter{{{latex_escape(chapter['chapter_title'])}}}",
+            "",
+        ])
         for scene in chapter.get("scenes", []):
             lines.extend(
                 scene_to_latex(
